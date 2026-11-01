@@ -1,0 +1,14 @@
+version: "2"
+
+run:
+  timeout: 3m
+
+linters:
+  exclusions:
+    generated: strict
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: strict

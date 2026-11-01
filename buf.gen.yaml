@@ -1,0 +1,20 @@
+version: v2
+managed:
+  enabled: true
+  disable:
+    - file_option: go_package
+      module: buf.build/googleapis/googleapis
+  override:
+    - file_option: go_package
+      value: github.com/ifitsmanu/xai-sdk-go/xaiapi
+# Run from the sibling xai-proto checkout. `out` is relative to that directory.
+plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.11
+    out: ../xai-sdk-go
+    opt:
+      - module=github.com/ifitsmanu/xai-sdk-go
+  - remote: buf.build/grpc/go:v1.5.1
+    out: ../xai-sdk-go
+    opt:
+      - module=github.com/ifitsmanu/xai-sdk-go
+      - require_unimplemented_servers=false
