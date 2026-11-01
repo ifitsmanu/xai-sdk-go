@@ -1,4 +1,5 @@
-// Package xai is a Go client for the xAI gRPC API.
+// Package xai is an independent Go client for the xAI API at api.x.ai.
+// It is written by Manu and is not published by xAI.
 //
 // Generated messages live in package xaiapi. Service helpers live in their
 // own packages (chat, image, video, files, models, batch, auth, tokenize,
