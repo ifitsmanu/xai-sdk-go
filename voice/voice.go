@@ -14,7 +14,6 @@ import (
 
 	"github.com/ifitsmanu/xai-sdk-go/internal/rest"
 	"github.com/ifitsmanu/xai-sdk-go/internal/rpc"
-	"github.com/ifitsmanu/xai-sdk-go/internal/wsx"
 )
 
 // Service is the voice API.
@@ -178,9 +177,10 @@ func (s *Service) ClientSecret(ctx context.Context, seconds int) (*Secret, error
 	return &out, s.conn.RESTClient().Call(ctx, http.MethodPost, "/v1/realtime/client_secrets", body, &out)
 }
 
-// Dial opens the speech-to-speech socket at /v1/realtime.
-func (s *Service) Dial(ctx context.Context, model string) (*Socket, error) {
-	return s.dial(ctx, "/v1/realtime", url.Values{"model": {model}})
+// Dial opens the speech-to-speech socket at /v1/realtime. Query keys follow the docs:
+// model, reasoning.effort, conversation_id (for resumption), and call_id (for SIP).
+func (s *Service) Dial(ctx context.Context, query url.Values) (*Socket, error) {
+	return s.dial(ctx, "/v1/realtime", query)
 }
 
 // DialTTS opens the streaming text-to-speech socket. Query keys follow the docs:
@@ -203,12 +203,12 @@ func (s *Service) dial(ctx context.Context, path string, query url.Values) (*Soc
 	return &Socket{Conn: ws}, nil
 }
 
-// Socket is one voice WebSocket. Send and Recv pass JSON events through.
-type Socket struct {
-	*wsx.Conn
+// Refer transfers a SIP call to target, a tel:+E.164 or sip:user@host URI.
+func (s *Service) Refer(ctx context.Context, callID, target string) error {
+	return s.conn.RESTClient().Call(ctx, http.MethodPost, rest.Path("/v1/realtime/calls", callID, "refer"), map[string]string{"target_uri": target}, nil)
 }
 
-// Update sends a session.update event. session is the session object from the docs.
-func (s *Socket) Update(ctx context.Context, session any) error {
-	return s.Send(ctx, map[string]any{"type": "session.update", "session": session})
+// Hangup ends a SIP call.
+func (s *Service) Hangup(ctx context.Context, callID string) error {
+	return s.conn.RESTClient().Call(ctx, http.MethodPost, rest.Path("/v1/realtime/calls", callID, "hangup"), struct{}{}, nil)
 }

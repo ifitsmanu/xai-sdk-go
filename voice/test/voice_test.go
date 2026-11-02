@@ -1,10 +1,13 @@
 package voice_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"net/url"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -42,7 +45,8 @@ func TestSpeakReturnsAudioWithType(t *testing.T) {
 // Realtime audio deltas reach about 108 KB live. The socket must read messages
 // far above the WebSocket library's 32 KiB default.
 func TestRealtimeReadsLargeAudioDelta(t *testing.T) {
-	delta := `{"type":"response.output_audio.delta","delta":"` + strings.Repeat("A", 200<<10) + `"}`
+	audio := bytes.Repeat([]byte{1, 2, 3}, 70<<10)
+	delta := `{"type":"response.output_audio.delta","delta":"` + base64.StdEncoding.EncodeToString(audio) + `"}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -54,16 +58,33 @@ func TestRealtimeReadsLargeAudioDelta(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	sock, err := service(srv.URL).Dial(context.Background(), "voice-model")
+	sock, err := service(srv.URL).Dial(context.Background(), url.Values{"model": {"voice-model"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = sock.Close() }()
-	got, err := sock.Recv(context.Background())
+	event, err := sock.Next(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(delta) {
-		t.Fatalf("read %d bytes, want %d", len(got), len(delta))
+	got, err := event.Audio()
+	if err != nil || event.Type != voice.EventAudioDelta || !bytes.Equal(got, audio) {
+		t.Fatalf("type %q, %d audio bytes, err %v", event.Type, len(got), err)
+	}
+}
+
+// Realtime tools use their own wire shape: a function is nested under "function",
+// while web search takes its domain list directly. The Responses API differs on both.
+func TestRealtimeToolShapes(t *testing.T) {
+	raw, err := json.Marshal(voice.Session{Tools: []voice.Tool{
+		voice.Function{Name: "lookup", Parameters: map[string]any{"type": "object"}},
+		voice.WebSearch{AllowedDomains: []string{"x.ai"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}},{"type":"web_search","allowed_domains":["x.ai"]}]}`
+	if string(raw) != want {
+		t.Fatalf("got  %s\nwant %s", raw, want)
 	}
 }

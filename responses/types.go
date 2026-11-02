@@ -2,6 +2,7 @@ package responses
 
 import (
 	"encoding/json"
+	"github.com/ifitsmanu/xai-sdk-go/internal/wire"
 	"strings"
 )
 
@@ -115,22 +116,22 @@ func UserText(text string) *Message {
 
 func (m *Message) MarshalJSON() ([]byte, error) {
 	type plain Message
-	return typed("message", (*plain)(m))
+	return wire.Typed("message", (*plain)(m))
 }
 
 func (f *FunctionCall) MarshalJSON() ([]byte, error) {
 	type plain FunctionCall
-	return typed("function_call", (*plain)(f))
+	return wire.Typed("function_call", (*plain)(f))
 }
 
 func (f *FunctionOutput) MarshalJSON() ([]byte, error) {
 	type plain FunctionOutput
-	return typed("function_call_output", (*plain)(f))
+	return wire.Typed("function_call_output", (*plain)(f))
 }
 
 func (r *ReasoningItem) MarshalJSON() ([]byte, error) {
 	type plain ReasoningItem
-	return typed("reasoning", (*plain)(r))
+	return wire.Typed("reasoning", (*plain)(r))
 }
 
 func (o *OtherItem) MarshalJSON() ([]byte, error) { return o.Raw, nil }
@@ -203,34 +204,36 @@ func (MCP) isTool()             {}
 
 func (t Function) MarshalJSON() ([]byte, error) {
 	type plain Function
-	return typed("function", plain(t))
+	return wire.Typed("function", plain(t))
 }
 
 func (t WebSearch) MarshalJSON() ([]byte, error) {
 	type plain WebSearch
-	return typed("web_search", plain(t))
+	return wire.Typed("web_search", plain(t))
 }
 
 func (t XSearch) MarshalJSON() ([]byte, error) {
 	type plain XSearch
-	return typed("x_search", plain(t))
+	return wire.Typed("x_search", plain(t))
 }
 
-func (CodeInterpreter) MarshalJSON() ([]byte, error) { return typed("code_interpreter", struct{}{}) }
+func (CodeInterpreter) MarshalJSON() ([]byte, error) {
+	return wire.Typed("code_interpreter", struct{}{})
+}
 
 func (t FileSearch) MarshalJSON() ([]byte, error) {
 	type plain FileSearch
-	return typed("file_search", plain(t))
+	return wire.Typed("file_search", plain(t))
 }
 
 func (t ImageGeneration) MarshalJSON() ([]byte, error) {
 	type plain ImageGeneration
-	return typed("image_generation", plain(t))
+	return wire.Typed("image_generation", plain(t))
 }
 
 func (t MCP) MarshalJSON() ([]byte, error) {
 	type plain MCP
-	return typed("mcp", plain(t))
+	return wire.Typed("mcp", plain(t))
 }
 
 // ToolChoice is a mode (none, auto, required) or one function by name.
@@ -413,17 +416,4 @@ func decodeItem(raw json.RawMessage) (Item, error) {
 		return other, json.Unmarshal(raw, other)
 	}
 	return item, json.Unmarshal(raw, item)
-}
-
-// typed encodes v as a JSON object with "type" first.
-func typed(kind string, v any) ([]byte, error) {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	head := `{"type":"` + kind + `"`
-	if string(raw) == "{}" {
-		return []byte(head + "}"), nil
-	}
-	return append([]byte(head+","), raw[1:]...), nil
 }

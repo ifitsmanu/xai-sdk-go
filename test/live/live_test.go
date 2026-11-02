@@ -10,9 +10,7 @@ package live
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -172,46 +170,64 @@ func TestSpeakAndTranscribe(t *testing.T) {
 	}
 }
 
-// A spoken reply sends audio deltas over 100 KB. This failed before the read limit was raised.
-func TestRealtimeSpokenReply(t *testing.T) {
+// A spoken turn where the model calls a client function mid-conversation and says
+// the result. Audio deltas exceed 100 KB, which failed before the read limit was raised.
+func TestRealtimeVoiceAgentToolCall(t *testing.T) {
 	c, ctx := client(t)
 	model := os.Getenv("XAI_LIVE_VOICE_MODEL")
 	if model == "" {
 		t.Skip("XAI_LIVE_VOICE_MODEL is not set")
 	}
-	sock, err := c.Voice.Dial(ctx, model)
+	sock, err := c.Voice.Dial(ctx, url.Values{"model": {model}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sock.Close()
-	send := func(v any) {
-		if err := sock.Send(ctx, v); err != nil {
+	defer func() { _ = sock.Close() }()
+	must := func(err error) {
+		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	send(map[string]any{"type": "conversation.item.create", "item": map[string]any{
-		"type": "message", "role": "user",
-		"content": []map[string]string{{"type": "input_text", "text": "Count from one to ten."}},
-	}})
-	send(map[string]any{"type": "response.create"})
-	largest := 0
+	must(sock.Update(ctx, voice.Session{
+		Instructions: "When asked for the secret code, call secret_code and read the result aloud.",
+		Tools: []voice.Tool{voice.Function{
+			Name: "secret_code", Description: "Returns the secret code.",
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
+		}},
+	}))
+	must(sock.SendText(ctx, "user", "What is the secret code?"))
+	must(sock.Respond(ctx))
+
+	var transcript strings.Builder
+	callResponse, largest, audio := "", 0, 0
 	for {
-		msg, err := sock.Recv(ctx)
-		if errors.Is(err, io.EOF) {
-			break
-		}
+		e, err := sock.Next(ctx)
 		if err != nil {
-			t.Fatalf("recv after %d bytes max: %v", largest, err)
+			t.Fatalf("after %d audio bytes: %v", audio, err)
 		}
-		largest = max(largest, len(msg))
-		var e struct{ Type string }
-		_ = json.Unmarshal(msg, &e)
-		if e.Type == "error" {
-			t.Fatalf("server error: %s", msg)
+		switch e.Type {
+		case voice.EventError:
+			t.Fatalf("server error: %+v", e.Error)
+		case voice.EventFunctionCall:
+			callResponse = e.ResponseID
+			must(sock.SendFunctionOutput(ctx, e.CallID, "PINEAPPLE-42"))
+			must(sock.Respond(ctx))
+		case voice.EventAudioDelta:
+			pcm, err := e.Audio()
+			must(err)
+			audio += len(pcm)
+			largest = max(largest, len(e.Delta))
+		case voice.EventTranscriptDelta:
+			if callResponse != "" && e.ResponseID != callResponse {
+				transcript.WriteString(e.Delta)
+			}
 		}
-		if e.Type == "response.done" {
+		if e.Type == voice.EventResponseDone && callResponse != "" && e.Response != nil && e.Response.ID != callResponse {
 			break
 		}
 	}
-	t.Logf("largest message %d bytes", largest)
+	t.Logf("said %q; %d audio bytes, largest delta %d bytes", transcript.String(), audio, largest)
+	if !strings.Contains(strings.ToLower(transcript.String()), "pineapple") {
+		t.Fatal("the spoken answer does not use the tool result")
+	}
 }
