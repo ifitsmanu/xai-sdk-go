@@ -56,5 +56,5 @@ $(BUF):
 	curl -fsSL -o $(BUF) "https://github.com/bufbuild/buf/releases/download/v$(BUF_VERSION)/buf-$$(uname -s)-$$(uname -m)"
 	chmod +x $(BUF)
 
-bench: ## Time the client and agent hot path
-	go test -bench=. -benchtime=100ms -run '^$$' ./agent/test ./chat/test
+bench: ## Time the chat hot path
+	go test -bench=. -benchtime=100ms -run '^$$' ./chat/test

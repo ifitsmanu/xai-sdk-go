@@ -4,34 +4,32 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"maps"
+	"slices"
 	"sync"
 
-	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
-	"google.golang.org/protobuf/proto"
+	"github.com/ifitsmanu/xai-sdk-go/responses"
 )
 
-type sessionContextKey struct{}
-
-// Session is the transcript and scratch state for one conversation.
-// Set and Get are safe for concurrent use. The runner is the only writer of Messages.
+// Session is one conversation: its items and scratch state.
+// Get and Set are safe for concurrent use; only the runner writes Items.
 type Session struct {
-	ID       string
-	Messages []*xaiapi.Message
+	ID    string
+	Items []responses.Item
 
 	mu    sync.RWMutex
 	state map[string]any
 }
 
-// NewSession returns a session with a random id and an empty state map.
+// NewSession returns an empty session with a random id.
 func NewSession() *Session {
-	return &Session{ID: newID(), state: map[string]any{}}
+	var b [12]byte
+	_, _ = rand.Read(b[:])
+	return &Session{ID: hex.EncodeToString(b[:]), state: map[string]any{}}
 }
 
-// Set stores a scratch value.
+// Set stores a state value. Instructions read it through {key} placeholders.
 func (s *Session) Set(key string, value any) {
-	if s == nil {
-		return
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.state == nil {
@@ -40,95 +38,33 @@ func (s *Session) Set(key string, value any) {
 	s.state[key] = value
 }
 
-// Get reads a scratch value.
+// Get reads a state value.
 func (s *Session) Get(key string) (any, bool) {
-	if s == nil {
-		return nil, false
-	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	v, ok := s.state[key]
 	return v, ok
 }
 
-// FromContext returns the session the runner attached to ctx.
-func FromContext(ctx context.Context) (*Session, bool) {
-	s, ok := ctx.Value(sessionContextKey{}).(*Session)
-	return s, ok && s != nil
-}
-
-func withSession(ctx context.Context, s *Session) context.Context {
-	return context.WithValue(ctx, sessionContextKey{}, s)
-}
-
-// Clone copies messages and state so parallel runs do not share a transcript.
+// Clone copies the item list and the state map. Items themselves are immutable.
 func (s *Session) Clone() *Session {
-	if s == nil {
-		return NewSession()
-	}
-	out := &Session{ID: s.ID, state: cloneState(nil)}
 	s.mu.RLock()
-	out.state = cloneState(s.state)
-	s.mu.RUnlock()
-	out.Messages = cloneMessages(s.Messages)
-	return out
+	defer s.mu.RUnlock()
+	return &Session{ID: s.ID, Items: slices.Clone(s.Items), state: maps.Clone(s.state)}
 }
 
-func cloneMessages(in []*xaiapi.Message) []*xaiapi.Message {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]*xaiapi.Message, len(in))
-	for i, msg := range in {
-		if msg == nil {
-			continue
-		}
-		cloned, _ := proto.Clone(msg).(*xaiapi.Message)
-		out[i] = cloned
-	}
-	return out
+type sessionKey struct{}
+
+// FromContext returns the session of the run that called a tool.
+func FromContext(ctx context.Context) (*Session, bool) {
+	s, ok := ctx.Value(sessionKey{}).(*Session)
+	return s, ok
 }
 
-func cloneState(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return map[string]any{}
-	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = cloneValue(v)
-	}
-	return out
-}
-
-func cloneValue(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		return cloneState(t)
-	case []any:
-		out := make([]any, len(t))
-		for i := range t {
-			out[i] = cloneValue(t[i])
-		}
-		return out
-	case proto.Message:
-		return proto.Clone(t)
-	default:
-		return v
-	}
-}
-
-func newID() string {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "session"
-	}
-	return hex.EncodeToString(b[:])
-}
-
-// Store persists sessions.
+// Store persists sessions between runs.
 type Store interface {
 	Load(ctx context.Context, id string) (*Session, error)
-	Save(ctx context.Context, session *Session) error
+	Save(ctx context.Context, s *Session) error
 }
 
 // MemoryStore keeps sessions in process memory.
@@ -137,12 +73,7 @@ type MemoryStore struct {
 	sessions map[string]*Session
 }
 
-// NewMemoryStore returns an empty store.
-func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{sessions: map[string]*Session{}}
-}
-
-// Load returns a copy of the session. A missing id returns an empty session with that id.
+// Load returns a copy of the session, or a new one with that id.
 func (m *MemoryStore) Load(_ context.Context, id string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -151,20 +82,16 @@ func (m *MemoryStore) Load(_ context.Context, id string) (*Session, error) {
 	}
 	s := NewSession()
 	s.ID = id
-	m.sessions[id] = s
-	return s.Clone(), nil
+	return s, nil
 }
 
-// Save stores a copy of the session by id.
-func (m *MemoryStore) Save(_ context.Context, session *Session) error {
-	if session == nil {
-		return nil
-	}
+// Save stores a copy of the session.
+func (m *MemoryStore) Save(_ context.Context, s *Session) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sessions == nil {
 		m.sessions = map[string]*Session{}
 	}
-	m.sessions[session.ID] = session.Clone()
+	m.sessions[s.ID] = s.Clone()
 	return nil
 }

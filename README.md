@@ -92,40 +92,53 @@ Set `Image` to `image.URL` or `image.File` to edit. On a video request, `Image` 
 
 ## Agent
 
-An agent is an instruction, a model, and tools. `client.Runner()` calls the model, runs the tool, and stores the transcript on a session.
+An agent is a model, an instruction, and tools. `client.Runner()` runs it on the Responses API: it streams each turn, runs function calls in parallel, sends results back, and stops when the model answers.
 
 ```go
 assistant := &agent.Agent{
 	Name:        "assistant",
 	Model:       model,
 	Instruction: "You are concise. Use tools when they help.",
-	Tools:       []tool.Tool{tool.WebSearch{}},
+	Tools:       []tool.Tool{weather, tool.WebSearch{}},
 }
 
-session := agent.NewSession()
-for ev, err := range client.Runner().Run(ctx, session, assistant, "What time is it?") {
+runner := client.Runner(agent.WithLimits(agent.Limits{CostUSD: 0.10, Time: time.Minute}))
+for ev, err := range runner.Run(ctx, agent.NewSession(), assistant, "Weather in Paris?") {
 	if err != nil {
 		return err
 	}
-	if ev.Kind == agent.KindText {
-		fmt.Println(ev.Text)
+	switch ev.Kind {
+	case agent.KindDelta:
+		fmt.Print(ev.Text) // streamed answer
+	case agent.KindToolCall:
+		fmt.Println("→", ev.Tool, ev.Args)
+	case agent.KindTurn:
+		fmt.Printf("$%.4f\n", ev.Usage.USD()) // what xAI charged for the turn
 	}
 }
 ```
 
-A full tool example is in `examples/agent`.
+- **Limits** cover the whole run: turns, tokens, dollars (from the server's charge), and time.
+- **Writes**: a `tool.Function` with `Writes: true` runs only after `agent.WithConfirm` says yes.
+- **Delegation**: `runner.AsTool(child)` lets an agent hand a task to another agent and get its answer back. `SubAgents` hand over the whole conversation.
+- **Structured output**: `Agent.Output` is a JSON Schema for the final answer; `OutputKey` saves it to session state, and `{key}` in a later instruction reads it.
+- **Workflows**: `RunSequential`, `RunParallel`, and `RunLoop` with `agent.Done`.
+
+`examples/agent` is a runnable version.
 
 ## Try it
 
-From a clone:
+From a clone, copy `.env.example` to `.env` and set `XAI_API_KEY`.
 
 ```bash
+make test    # free; every behavior and regression test
+make live    # real API, about $0.10: text, tools, web search, speech, voice agent, delegation
 make ui      # terminal chat
-make chat    # one completion
-make agent   # one tool call
+make chat    # one reply
+make agent   # typed tool + web search, streamed, with cost
 ```
 
-`make ui` opens with no key. Set `XAI_API_KEY` before you send. Logs stay off unless you pass `xai.WithLogLevel`. The key is not written to the log.
+Logs stay off unless you pass `xai.WithLogLevel`. The key is never logged.
 
 ## License
 

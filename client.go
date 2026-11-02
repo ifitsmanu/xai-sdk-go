@@ -206,11 +206,11 @@ func (c *Client) GRPC() *grpc.ClientConn {
 	return c.conn.GRPC
 }
 
-// Runner builds an agent runner that samples through this client's chat API
+// Runner builds an agent runner on this client's Responses API
 // and writes logs to the client logger.
 func (c *Client) Runner(opts ...agent.Option) *agent.Runner {
 	opts = append([]agent.Option{agent.WithLogger(c.Logger())}, opts...)
-	return agent.NewRunner(c.Chat, opts...)
+	return agent.NewRunner(c.Responses, opts...)
 }
 
 func normalizeHost(host string) string {

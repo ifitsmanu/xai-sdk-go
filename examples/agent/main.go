@@ -52,6 +52,7 @@ func main() {
 	}
 
 	session := agent.NewSession()
+	var spent float64
 	for ev, err := range client.Runner().Run(context.Background(), session, assistant, "What time is it in Tokyo, and what is the top xAI news today?") {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -59,11 +60,14 @@ func main() {
 		}
 		switch ev.Kind {
 		case agent.KindToolCall:
-			fmt.Printf("tool %s %s\n", ev.Tool, ev.Args)
+			fmt.Printf("→ %s %s\n", ev.Tool, ev.Args)
 		case agent.KindToolResult:
-			fmt.Printf("result %s\n", ev.Result)
-		case agent.KindText:
-			fmt.Println(ev.Text)
+			fmt.Printf("← %s\n", ev.Result)
+		case agent.KindDelta:
+			fmt.Print(ev.Text)
+		case agent.KindTurn:
+			spent += ev.Usage.USD()
 		}
 	}
+	fmt.Printf("\n\ncost $%.4f\n", spent)
 }

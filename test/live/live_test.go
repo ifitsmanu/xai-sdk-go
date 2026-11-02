@@ -17,8 +17,10 @@ import (
 	"time"
 
 	"github.com/ifitsmanu/xai-sdk-go"
+	"github.com/ifitsmanu/xai-sdk-go/agent"
 	"github.com/ifitsmanu/xai-sdk-go/models"
 	"github.com/ifitsmanu/xai-sdk-go/responses"
+	"github.com/ifitsmanu/xai-sdk-go/tool"
 	"github.com/ifitsmanu/xai-sdk-go/voice"
 )
 
@@ -229,5 +231,37 @@ func TestRealtimeVoiceAgentToolCall(t *testing.T) {
 	t.Logf("said %q; %d audio bytes, largest delta %d bytes", transcript.String(), audio, largest)
 	if !strings.Contains(strings.ToLower(transcript.String()), "pineapple") {
 		t.Fatal("the spoken answer does not use the tool result")
+	}
+}
+
+// A lead agent delegates to a researcher agent used as a tool, under a cost cap.
+func TestAgentDelegatesWithinBudget(t *testing.T) {
+	c, ctx := client(t)
+	model := languageModel(t, c, ctx)
+	runner := c.Runner(agent.WithLimits(agent.Limits{CostUSD: 0.05, Turns: 6}))
+	code, err := tool.Func("vault_code", "Reads the vault code.", func(context.Context, struct{}) (string, error) { return "ORCHID-7", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	researcher := &agent.Agent{Name: "researcher", Description: "Looks things up with its tools.", Model: model,
+		Instruction: "Use vault_code to answer. Reply with the code only.", Tools: []tool.Tool{code}}
+	lead := &agent.Agent{Name: "lead", Model: model,
+		Instruction: "Delegate lookups to researcher, then answer in one sentence.", Tools: []tool.Tool{runner.AsTool(researcher)}}
+	var answer string
+	var spent float64
+	for e, err := range runner.Run(ctx, agent.NewSession(), lead, "What is the vault code?") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch e.Kind {
+		case agent.KindMessage:
+			answer = e.Text
+		case agent.KindTurn:
+			spent += e.Usage.USD()
+		}
+	}
+	t.Logf("answer %q, lead cost $%.4f", answer, spent)
+	if !strings.Contains(answer, "ORCHID-7") {
+		t.Fatal("the lead did not use the researcher's answer")
 	}
 }

@@ -1,88 +1,106 @@
-// Package agent runs multi-turn tool loops on top of the xAI chat API.
-//
-// An agent has an instruction, a model, and tools. A runner samples the
-// model, executes client-side tool calls, and records the conversation on
-// a session. Agents can hand work to other agents, or run in sequence or
-// in parallel.
+// Package agent runs Grok agents on the Responses API: streaming turns,
+// local and server tools, handoffs, agents as tools, structured output, and
+// run-wide limits on turns, tokens, cost, and time.
 package agent
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
-	"github.com/ifitsmanu/xai-sdk-go/chat"
+	"github.com/ifitsmanu/xai-sdk-go/responses"
 	"github.com/ifitsmanu/xai-sdk-go/tool"
-	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
 
 // HandoffTool is the function name used to move the conversation to another agent.
 const HandoffTool = "handoff"
 
-// DefaultMaxTurns is the client-side tool loop limit when Agent.MaxTurns is unset.
-const DefaultMaxTurns = 8
-
-// Agent is one model, one instruction, and the tools it may call.
-// Instruction and SubAgents are read on every model call.
+// Agent is a model, an instruction, and the tools it may use.
 type Agent struct {
 	Name        string
 	Description string
 	Model       string
+	// Instruction may contain {key} placeholders filled from session state.
 	Instruction string
 	// Tools mixes functions this process runs with server tools xAI runs.
 	Tools     []tool.Tool
 	SubAgents []*Agent
-	// MaxTurns limits client-side model calls. Zero uses DefaultMaxTurns.
-	MaxTurns int
-	// ServerMaxTurns is sent as the API max_turns for server-side tools.
-	ServerMaxTurns *int32
-	Hooks          Hooks
+	// Output is a JSON Schema the final answer must match.
+	Output any
+	// OutputKey stores the final answer text in session state under this key.
+	OutputKey string
+	// Reasoning is the effort for reasoning models; see models.Capabilities.
+	Reasoning string
+	// Configure adjusts each request, for settings without a field here.
+	Configure func(*responses.Request)
+	Hooks     Hooks
 }
 
-// Hooks observe or reject a model call or a tool call.
-// A non-nil error from BeforeModel or BeforeTool stops the run.
+// Hooks observe or stop a run. A non-nil error from a Before hook stops the run.
 type Hooks struct {
-	BeforeModel func(ctx context.Context, agentName string, req *xaiapi.GetCompletionsRequest) error
-	AfterModel  func(ctx context.Context, agentName string, resp *chat.Response) error
+	BeforeModel func(ctx context.Context, agent string, req *responses.Request) error
+	AfterModel  func(ctx context.Context, agent string, resp *responses.Response) error
 	BeforeTool  func(ctx context.Context, call Call) error
 	AfterTool   func(ctx context.Context, call Call, result string, err error)
 }
 
-// Call is one client-side function invocation.
+// Call is one function call from the model.
 type Call struct {
 	ID   string
 	Name string
 	Args json.RawMessage
 }
 
-func (a *Agent) systemPrompt() string {
-	if a == nil || len(a.SubAgents) == 0 {
-		if a == nil {
-			return ""
+func (a *Agent) request(s *Session) (responses.Request, error) {
+	tools := a.Tools
+	if len(a.SubAgents) > 0 {
+		tools = append(slices.Clip(tools), handoffTool(a.SubAgents))
+	}
+	specs, err := tool.ForResponses(tools)
+	if err != nil {
+		return responses.Request{}, fmt.Errorf("agent %s: %w", a.Name, err)
+	}
+	req := responses.Request{
+		Model:          a.Model,
+		Instructions:   a.instruction(s),
+		Input:          responses.Items(slices.Clone(s.Items)),
+		Tools:          specs,
+		PromptCacheKey: s.ID,
+	}
+	if a.Output != nil {
+		req.Text = responses.JSONSchema(a.Output)
+	}
+	if a.Reasoning != "" {
+		req.Reasoning = &responses.Reasoning{Effort: a.Reasoning}
+	}
+	if a.Configure != nil {
+		a.Configure(&req)
+	}
+	return req, nil
+}
+
+var placeholder = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_.]*)\}`)
+
+func (a *Agent) instruction(s *Session) string {
+	text := placeholder.ReplaceAllStringFunc(a.Instruction, func(m string) string {
+		if v, ok := s.Get(m[1 : len(m)-1]); ok {
+			return fmt.Sprint(v)
 		}
-		return a.Instruction
+		return m
+	})
+	if len(a.SubAgents) == 0 {
+		return text
 	}
 	var b strings.Builder
-	b.WriteString(a.Instruction)
-	b.WriteString("\n\nYou can hand off by calling ")
-	b.WriteString(HandoffTool)
-	b.WriteString(" with the agent name.\nAgents:\n")
+	b.WriteString(text)
+	b.WriteString("\n\nCall " + HandoffTool + " to pass the conversation to one of these agents:\n")
 	for _, sub := range a.SubAgents {
-		if sub == nil {
-			continue
-		}
 		fmt.Fprintf(&b, "- %s: %s\n", sub.Name, sub.Description)
 	}
 	return b.String()
-}
-
-func (a *Agent) maxTurns() int {
-	if a == nil || a.MaxTurns <= 0 {
-		return DefaultMaxTurns
-	}
-	return a.MaxTurns
 }
 
 func (a *Agent) findSub(name string) *Agent {
@@ -94,29 +112,16 @@ func (a *Agent) findSub(name string) *Agent {
 	return nil
 }
 
-func (a *Agent) toolSpecs() ([]*xaiapi.Tool, map[string]*tool.Function, error) {
-	tools := a.Tools
-	if len(a.SubAgents) > 0 {
-		tools = append(slices.Clip(tools), handoffTool(a.SubAgents))
-	}
-	specs, err := tool.ForChat(tools)
-	if err != nil {
-		return nil, nil, err
-	}
-	return specs, tool.Functions(tools), nil
-}
-
-// handoffTool is declared to the model; the runner handles the call itself.
 func handoffTool(subs []*Agent) *tool.Function {
 	names := make([]string, 0, len(subs))
 	for _, sub := range subs {
-		if sub != nil && sub.Name != "" {
+		if sub != nil {
 			names = append(names, sub.Name)
 		}
 	}
 	return &tool.Function{
 		Name:        HandoffTool,
-		Description: "Hand the conversation to another agent.",
+		Description: "Pass the conversation to another agent.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"agent": map[string]any{"type": "string", "enum": names}},
