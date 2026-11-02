@@ -1,5 +1,9 @@
 .DEFAULT_GOAL := help
 
+# Load .env when present so live, ui, chat, and agent see the keys. See .env.example.
+-include .env
+export
+
 BUF_VERSION ?= 1.61.0
 BIN := bin
 BUF := $(BIN)/buf
