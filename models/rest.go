@@ -1,0 +1,90 @@
+package models
+
+import (
+	"context"
+	"encoding/json"
+	"net/url"
+)
+
+// VideoModel is one video generation model from GET /v1/video-generation-models.
+// The gRPC models API does not list video models.
+type VideoModel struct {
+	ID               string   `json:"id"`
+	Fingerprint      string   `json:"fingerprint"`
+	Created          int64    `json:"created"`
+	Version          string   `json:"version"`
+	Aliases          []string `json:"aliases"`
+	InputModalities  []string `json:"input_modalities"`
+	OutputModalities []string `json:"output_modalities"`
+}
+
+// ListedModel is one row from GET /v1/models.
+// That list includes language, image, video, and embedding models, plus prices.
+type ListedModel struct {
+	ID                       string   `json:"id"`
+	Aliases                  []string `json:"aliases"`
+	Created                  int64    `json:"created"`
+	OwnedBy                  string   `json:"owned_by"`
+	ContextLength            int64    `json:"context_length"`
+	PromptTextTokenPrice     int64    `json:"prompt_text_token_price"`
+	CompletionTextTokenPrice int64    `json:"completion_text_token_price"`
+	ImagePrice               int64    `json:"image_price"`
+}
+
+// All lists every model this key can call, from the REST models API.
+func (s *Service) All(ctx context.Context) ([]ListedModel, error) {
+	body, err := s.conn.GetJSON(ctx, "/v1/models")
+	if err != nil {
+		return nil, err
+	}
+	var page struct {
+		Data []ListedModel `json:"data"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, err
+	}
+	return page.Data, nil
+}
+
+// ListVideo lists the video generation models this key can call.
+func (s *Service) ListVideo(ctx context.Context) ([]VideoModel, error) {
+	body, err := s.conn.GetJSON(ctx, "/v1/video-generation-models")
+	if err != nil {
+		return nil, err
+	}
+	var page struct {
+		Models []VideoModel `json:"models"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, err
+	}
+	return page.Models, nil
+}
+
+// Video returns one video generation model.
+func (s *Service) Video(ctx context.Context, id string) (*VideoModel, error) {
+	body, err := s.conn.GetJSON(ctx, "/v1/video-generation-models/"+url.PathEscape(id))
+	if err != nil {
+		return nil, err
+	}
+	var model VideoModel
+	if err := json.Unmarshal(body, &model); err != nil {
+		return nil, err
+	}
+	return &model, nil
+}
+
+// VideoNames lists video model ids in API order.
+func (s *Service) VideoNames(ctx context.Context) ([]string, error) {
+	listed, err := s.ListVideo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(listed))
+	for _, model := range listed {
+		if model.ID != "" {
+			out = append(out, model.ID)
+		}
+	}
+	return out, nil
+}

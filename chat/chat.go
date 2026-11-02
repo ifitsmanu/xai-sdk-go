@@ -4,11 +4,14 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"iter"
+	"time"
 
 	"github.com/ifitsmanu/xai-sdk-go/internal/rpc"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
+	"google.golang.org/protobuf/proto"
 )
 
 // ErrNoMessages is returned when a completion is requested with an empty transcript.
@@ -22,6 +25,7 @@ type Config struct {
 	User                string
 	SafetyIdentifier    string
 	MaxTokens           *int32
+	N                   *int32
 	Seed                *int32
 	Stop                []string
 	Temperature         *float32
@@ -98,6 +102,9 @@ func (s *Service) Create(cfg Config) *Chat {
 		count := cfg.AgentCount
 		req.AgentCount = &count
 	}
+	if cfg.N != nil {
+		req.N = cfg.N
+	}
 	return &Chat{svc: s, req: req}
 }
 
@@ -133,7 +140,60 @@ func (s *Service) Compact(ctx context.Context, model string, messages []*xaiapi.
 	return s.stub.CompactContext(ctx, &xaiapi.CompactContextRequest{Model: model, Input: messages})
 }
 
-// Deferred fetches a completion started with Chat.Defer.
+// Wait polls a deferred completion until it finishes, expires, or the budget ends.
+// The budget is ten minutes. Each poll is limited by the connection timeout.
+func (s *Service) Wait(ctx context.Context, requestID string) (*Response, error) {
+	if requestID == "" {
+		return nil, errors.New("xai: deferred request id is empty")
+	}
+	pollCtx, pollCancel := context.WithTimeout(ctx, deferredBudget)
+	defer pollCancel()
+	ticker := time.NewTicker(deferredInterval)
+	defer ticker.Stop()
+	for {
+		resp, err := s.pollDeferred(pollCtx, requestID)
+		if err != nil {
+			return nil, err
+		}
+		switch resp.GetStatus() {
+		case xaiapi.DeferredStatus_DONE:
+			if resp.GetResponse() == nil {
+				return nil, errors.New("xai: deferred completion finished without a response")
+			}
+			return &Response{Proto: resp.GetResponse()}, nil
+		case xaiapi.DeferredStatus_FAILED:
+			return &Response{Proto: resp.GetResponse()}, errors.New("xai: deferred completion failed")
+		case xaiapi.DeferredStatus_EXPIRED:
+			return nil, errors.New("xai: deferred completion expired")
+		case xaiapi.DeferredStatus_PENDING, xaiapi.DeferredStatus_INVALID_DEFERRED_STATUS:
+		default:
+			return nil, fmt.Errorf("xai: deferred status %s", resp.GetStatus())
+		}
+		select {
+		case <-pollCtx.Done():
+			return nil, pollCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Service) pollDeferred(pollCtx context.Context, requestID string) (*xaiapi.GetDeferredCompletionResponse, error) {
+	timeout := s.conn.Timeout
+	if timeout <= 0 {
+		timeout = rpc.DefaultTimeout
+	}
+	callCtx, cancel := context.WithTimeout(context.WithoutCancel(pollCtx), timeout)
+	stop := context.AfterFunc(pollCtx, cancel)
+	defer stop()
+	defer cancel()
+	resp, err := s.stub.GetDeferredCompletion(callCtx, &xaiapi.GetDeferredRequest{RequestId: requestID})
+	if err != nil && pollCtx.Err() != nil {
+		return nil, pollCtx.Err()
+	}
+	return resp, err
+}
+
+// Deferred fetches one poll of a completion started with Chat.Defer.
 func (s *Service) Deferred(ctx context.Context, requestID string) (*xaiapi.GetDeferredCompletionResponse, error) {
 	ctx, cancel := s.conn.Context(ctx)
 	defer cancel()
@@ -191,6 +251,41 @@ func (ch *Chat) Sample(ctx context.Context) (*Response, error) {
 	return &Response{Proto: resp}, nil
 }
 
+// SampleN asks for n completions in one request. It does not change the chat's saved N.
+func (ch *Chat) SampleN(ctx context.Context, n int32) (*Response, error) {
+	if n < 1 {
+		return nil, errors.New("xai: completion count must be at least 1")
+	}
+	req, err := ch.request()
+	if err != nil {
+		return nil, err
+	}
+	copied, ok := proto.Clone(req).(*xaiapi.GetCompletionsRequest)
+	if !ok || copied == nil {
+		return nil, errors.New("xai: chat request could not be copied")
+	}
+	copied.N = &n
+	resp, err := ch.svc.Complete(ctx, copied)
+	if err != nil {
+		return nil, err
+	}
+	return &Response{Proto: resp}, nil
+}
+
+// Compact sends the current transcript to CompactContext and replaces it with the result.
+func (ch *Chat) Compact(ctx context.Context) (*xaiapi.CompactContextResponse, error) {
+	req, err := ch.request()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := ch.svc.Compact(ctx, req.GetModel(), req.GetMessages())
+	if err != nil {
+		return nil, err
+	}
+	ch.UseCompacted(resp)
+	return resp, nil
+}
+
 // Stream yields each chunk and the response accumulated so far.
 // The same StreamDelta and Response pointers are reused for every chunk.
 // Content and Reasoning stay current during the stream. The protobuf text
@@ -210,7 +305,7 @@ func (ch *Chat) Stream(ctx context.Context) iter.Seq2[*StreamDelta, error] {
 			return
 		}
 		acc := &Response{Proto: &xaiapi.GetChatCompletionResponse{}}
-		defer acc.flush()
+		defer acc.Flush()
 		delta := &StreamDelta{Response: acc}
 		for {
 			chunk, err := stream.Recv()
@@ -221,7 +316,7 @@ func (ch *Chat) Stream(ctx context.Context) iter.Seq2[*StreamDelta, error] {
 				yield(nil, err)
 				return
 			}
-			acc.applyChunk(chunk)
+			acc.ApplyChunk(chunk)
 			delta.Chunk = chunk
 			if !yield(delta, nil) {
 				return
@@ -244,6 +339,20 @@ func (ch *Chat) Defer(ctx context.Context) (string, error) {
 	}
 	return resp.GetRequestId(), nil
 }
+
+// Await starts a deferred completion and polls until it finishes.
+func (ch *Chat) Await(ctx context.Context) (*Response, error) {
+	id, err := ch.Defer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ch.svc.Wait(ctx, id)
+}
+
+const (
+	deferredInterval = 100 * time.Millisecond
+	deferredBudget   = 10 * time.Minute
+)
 
 func (ch *Chat) request() (*xaiapi.GetCompletionsRequest, error) {
 	if ch == nil || ch.req == nil || len(ch.req.Messages) == 0 {

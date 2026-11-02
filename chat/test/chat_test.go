@@ -1,14 +1,16 @@
-package chat
+package chat_test
 
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/ifitsmanu/xai-sdk-go/chat"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
 
 func TestMessagesFromResponseCopiesToolCallID(t *testing.T) {
-	resp := &Response{Proto: &xaiapi.GetChatCompletionResponse{
+	resp := &chat.Response{Proto: &xaiapi.GetChatCompletionResponse{
 		Outputs: []*xaiapi.CompletionOutput{{
 			Message: &xaiapi.CompletionMessage{
 				Role: xaiapi.MessageRole_ROLE_TOOL,
@@ -20,7 +22,7 @@ func TestMessagesFromResponseCopiesToolCallID(t *testing.T) {
 			},
 		}},
 	}}
-	msgs := MessagesFromResponse(resp)
+	msgs := chat.MessagesFromResponse(resp)
 	if len(msgs) != 1 {
 		t.Fatalf("messages = %d", len(msgs))
 	}
@@ -30,8 +32,8 @@ func TestMessagesFromResponseCopiesToolCallID(t *testing.T) {
 }
 
 func TestStreamAccumulator(t *testing.T) {
-	resp := &Response{Proto: &xaiapi.GetChatCompletionResponse{}}
-	resp.applyChunk(&xaiapi.GetChatCompletionChunk{
+	resp := &chat.Response{Proto: &xaiapi.GetChatCompletionResponse{}}
+	resp.ApplyChunk(&xaiapi.GetChatCompletionChunk{
 		Id:    "resp_1",
 		Model: "grok-test",
 		Outputs: []*xaiapi.CompletionOutputChunk{{
@@ -39,7 +41,7 @@ func TestStreamAccumulator(t *testing.T) {
 			Delta: &xaiapi.Delta{Role: xaiapi.MessageRole_ROLE_ASSISTANT, Content: "Hello"},
 		}},
 	})
-	resp.applyChunk(&xaiapi.GetChatCompletionChunk{
+	resp.ApplyChunk(&xaiapi.GetChatCompletionChunk{
 		Citations: []string{"https://x.ai"},
 		Outputs: []*xaiapi.CompletionOutputChunk{{
 			Index:        0,
@@ -59,7 +61,7 @@ func TestStreamAccumulator(t *testing.T) {
 	if resp.Proto.Outputs[0].FinishReason != xaiapi.FinishReason_REASON_STOP {
 		t.Fatalf("finish = %s", resp.Proto.Outputs[0].FinishReason)
 	}
-	resp.flush()
+	resp.Flush()
 	if resp.Proto.Outputs[0].Message.Content != "Hello world" {
 		t.Fatalf("flushed content = %q", resp.Proto.Outputs[0].Message.Content)
 	}
@@ -68,8 +70,54 @@ func TestStreamAccumulator(t *testing.T) {
 	}
 }
 
+func TestServerToolConfigs(t *testing.T) {
+	web := chat.WebSearch(chat.WebSearchConfig{
+		AllowedDomains:     []string{"x.ai"},
+		ImageUnderstanding: true,
+		Country:            "US",
+		City:               "Austin",
+	}).GetWebSearch()
+	if web.GetEnableImageUnderstanding() != true || web.GetUserLocation().GetCity() != "Austin" {
+		t.Fatalf("web = %+v", web)
+	}
+	if web.GetEnableImageSearch() {
+		t.Fatal("image search was set")
+	}
+
+	when := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	x := chat.XSearch(chat.XSearchConfig{From: when, AllowedHandles: []string{"xai"}, VideoUnderstanding: true}).GetXSearch()
+	if x.GetFromDate().AsTime().UTC() != when || !x.GetEnableVideoUnderstanding() {
+		t.Fatalf("x = %+v", x)
+	}
+
+	collections := chat.CollectionsSearch(chat.CollectionsSearchConfig{
+		CollectionIDs: []string{"c1"},
+		Retrieval:     "semantic",
+		Instructions:  "recent",
+	}).GetCollectionsSearch()
+	if collections.GetSemanticRetrieval() == nil || collections.GetInstructions() != "recent" {
+		t.Fatalf("collections = %+v", collections)
+	}
+
+	mcp := chat.MCP(chat.MCPConfig{
+		ServerURL:     "https://example.com/mcp",
+		Authorization: "token",
+		ExtraHeaders:  map[string]string{"X-Test": "1"},
+	}).GetMcp()
+	if mcp.GetServerUrl() != "https://example.com/mcp" || mcp.GetExtraHeaders()["X-Test"] != "1" {
+		t.Fatalf("mcp = %+v", mcp)
+	}
+}
+
+func TestWaitDeferredRequiresID(t *testing.T) {
+	_, err := (&chat.Service{}).Wait(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+}
+
 func TestFunctionSchema(t *testing.T) {
-	tool, err := Function("get_weather", "Weather", map[string]any{
+	tool, err := chat.Function("get_weather", "Weather", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"city": map[string]any{"type": "string"},
@@ -85,7 +133,7 @@ func TestFunctionSchema(t *testing.T) {
 }
 
 func TestClientFunctionIgnoresServerTools(t *testing.T) {
-	_, ok := ClientFunction(&xaiapi.ToolCall{
+	_, ok := chat.ClientFunction(&xaiapi.ToolCall{
 		Id:   "call_web",
 		Type: xaiapi.ToolCallType_TOOL_CALL_TYPE_WEB_SEARCH_TOOL,
 		Tool: &xaiapi.ToolCall_Function{Function: &xaiapi.FunctionCall{Name: "web_search", Arguments: `{}`}},
@@ -93,7 +141,7 @@ func TestClientFunctionIgnoresServerTools(t *testing.T) {
 	if ok {
 		t.Fatal("server-side tool was treated as a client function")
 	}
-	fn, ok := ClientFunction(&xaiapi.ToolCall{
+	fn, ok := chat.ClientFunction(&xaiapi.ToolCall{
 		Id:   "call_fn",
 		Type: xaiapi.ToolCallType_TOOL_CALL_TYPE_CLIENT_SIDE_TOOL,
 		Tool: &xaiapi.ToolCall_Function{Function: &xaiapi.FunctionCall{Name: "get_weather", Arguments: `{"city":"Austin"}`}},
@@ -104,14 +152,20 @@ func TestClientFunctionIgnoresServerTools(t *testing.T) {
 }
 
 func TestChatAppendAndEmptySample(t *testing.T) {
-	svc := &Service{}
-	conv := svc.Create(Config{Model: "grok-test"})
-	if _, err := conv.Sample(context.Background()); err != ErrNoMessages {
+	svc := &chat.Service{}
+	conv := svc.Create(chat.Config{Model: "grok-test"})
+	if _, err := conv.Sample(context.Background()); err != chat.ErrNoMessages {
 		t.Fatalf("sample err = %v", err)
 	}
-	conv.Append(SystemText("Be brief.")).Append(UserText("Hi"))
+	conv.Append(chat.SystemText("Be brief.")).Append(chat.UserText("Hi"))
 	if len(conv.Request().Messages) != 2 {
 		t.Fatalf("messages = %d", len(conv.Request().Messages))
+	}
+	if _, err := conv.SampleN(context.Background(), 0); err == nil {
+		t.Fatal("expected sample count error")
+	}
+	if _, err := (&chat.Service{}).Create(chat.Config{}).Compact(context.Background()); err != chat.ErrNoMessages {
+		t.Fatalf("compact err = %v", err)
 	}
 	conv.UseCompacted(&xaiapi.CompactContextResponse{EncryptedContent: "blob"})
 	if len(conv.Request().Messages) != 1 || conv.Request().Messages[0].EncryptedContent != "blob" {

@@ -1,8 +1,9 @@
-package chat
+package chat_test
 
 import (
 	"testing"
 
+	"github.com/ifitsmanu/xai-sdk-go/chat"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
 
@@ -14,13 +15,13 @@ func BenchmarkStreamAccumulate(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		resp := &Response{Proto: &xaiapi.GetChatCompletionResponse{}}
+		resp := &chat.Response{Proto: &xaiapi.GetChatCompletionResponse{}}
 		for n := 0; n < 256; n++ {
-			resp.applyChunk(chunk)
+			resp.ApplyChunk(chunk)
 		}
 		if resp.Content() == "" {
 			b.Fatal("empty")
 		}
-		resp.flush()
+		resp.Flush()
 	}
 }

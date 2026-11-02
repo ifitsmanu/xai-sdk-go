@@ -1,4 +1,4 @@
-package agent
+package agent_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ifitsmanu/xai-sdk-go/agent"
 	"github.com/ifitsmanu/xai-sdk-go/chat"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
@@ -55,12 +56,12 @@ func call(id, name, args string) *xaiapi.ToolCall {
 
 func TestRunnerExecutesToolThenAnswers(t *testing.T) {
 	var seenArgs string
-	ag := &Agent{
+	ag := &agent.Agent{
 		Name:        "weather",
 		Model:       "grok-test",
 		Instruction: "Use tools.",
-		Tools: []Tool{
-			Func("get_weather", "Get weather", map[string]any{"type": "object"}, func(_ context.Context, args json.RawMessage) (string, error) {
+		Tools: []agent.Tool{
+			agent.Func("get_weather", "Get weather", map[string]any{"type": "object"}, func(_ context.Context, args json.RawMessage) (string, error) {
 				seenArgs = string(args)
 				return "sunny", nil
 			}),
@@ -86,16 +87,16 @@ func TestRunnerExecutesToolThenAnswers(t *testing.T) {
 		}
 		return assistant("It is sunny."), nil
 	}}
-	runner := NewRunner(comp)
-	session := NewSession()
-	var kinds []Kind
+	runner := agent.NewRunner(comp)
+	session := agent.NewSession()
+	var kinds []agent.Kind
 	var text string
 	for ev, err := range runner.Run(context.Background(), session, ag, "weather in Austin?") {
 		if err != nil {
 			t.Fatal(err)
 		}
 		kinds = append(kinds, ev.Kind)
-		if ev.Kind == KindText {
+		if ev.Kind == agent.KindText {
 			text = ev.Text
 		}
 	}
@@ -108,18 +109,39 @@ func TestRunnerExecutesToolThenAnswers(t *testing.T) {
 	if comp.count() != 2 {
 		t.Fatalf("calls = %d", comp.count())
 	}
-	if len(kinds) == 0 || kinds[len(kinds)-1] != KindText {
+	if len(kinds) == 0 || kinds[len(kinds)-1] != agent.KindText {
 		t.Fatalf("kinds = %v", kinds)
 	}
 }
 
+func TestServerToolsAreSent(t *testing.T) {
+	web := chat.WebSearch(chat.WebSearchConfig{AllowedDomains: []string{"x.ai"}})
+	ag := &agent.Agent{
+		Name:        "search",
+		Model:       "grok-test",
+		Instruction: "Search when needed.",
+		ServerTools: []*xaiapi.Tool{web},
+	}
+	comp := &scripted{fn: func(req *xaiapi.GetCompletionsRequest) (*xaiapi.GetChatCompletionResponse, error) {
+		if len(req.Tools) != 1 || req.Tools[0].GetWebSearch().GetAllowedDomains()[0] != "x.ai" {
+			t.Fatalf("tools = %+v", req.Tools)
+		}
+		return assistant("done"), nil
+	}}
+	for _, err := range agent.NewRunner(comp).Run(context.Background(), agent.NewSession(), ag, "latest?") {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestHandoffSwitchesAgent(t *testing.T) {
-	writer := &Agent{Name: "writer", Description: "Writes", Model: "grok-writer", Instruction: "Write plainly."}
-	router := &Agent{
+	writer := &agent.Agent{Name: "writer", Description: "Writes", Model: "grok-writer", Instruction: "Write plainly."}
+	router := &agent.Agent{
 		Name:        "router",
 		Model:       "grok-router",
 		Instruction: "Route the request.",
-		SubAgents:   []*Agent{writer},
+		SubAgents:   []*agent.Agent{writer},
 	}
 	step := 0
 	comp := &scripted{fn: func(req *xaiapi.GetCompletionsRequest) (*xaiapi.GetChatCompletionResponse, error) {
@@ -128,7 +150,7 @@ func TestHandoffSwitchesAgent(t *testing.T) {
 			if req.Model != "grok-router" {
 				t.Errorf("model = %s", req.Model)
 			}
-			return assistant("", call("h1", HandoffTool, `{"agent":"writer"}`)), nil
+			return assistant("", call("h1", agent.HandoffTool, `{"agent":"writer"}`)), nil
 		}
 		if req.Model != "grok-writer" {
 			t.Errorf("model after handoff = %s", req.Model)
@@ -142,11 +164,11 @@ func TestHandoffSwitchesAgent(t *testing.T) {
 		return assistant("A short note."), nil
 	}}
 	var handed string
-	for ev, err := range NewRunner(comp).Run(context.Background(), NewSession(), router, "write a note") {
+	for ev, err := range agent.NewRunner(comp).Run(context.Background(), agent.NewSession(), router, "write a note") {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ev.Kind == KindHandoff {
+		if ev.Kind == agent.KindHandoff {
 			handed = ev.Text
 		}
 	}
@@ -156,8 +178,8 @@ func TestHandoffSwitchesAgent(t *testing.T) {
 }
 
 func TestSequentialPassesText(t *testing.T) {
-	draft := &Agent{Name: "draft", Model: "m1", Instruction: "Draft."}
-	edit := &Agent{Name: "edit", Model: "m2", Instruction: "Edit."}
+	draft := &agent.Agent{Name: "draft", Model: "m1", Instruction: "Draft."}
+	edit := &agent.Agent{Name: "edit", Model: "m2", Instruction: "Edit."}
 	step := 0
 	comp := &scripted{fn: func(req *xaiapi.GetCompletionsRequest) (*xaiapi.GetChatCompletionResponse, error) {
 		step++
@@ -184,12 +206,12 @@ func TestSequentialPassesText(t *testing.T) {
 		return assistant("polished"), nil
 	}}
 	var text string
-	session := NewSession()
-	for ev, err := range NewRunner(comp).RunSequential(context.Background(), session, []*Agent{draft, edit}, "start") {
+	session := agent.NewSession()
+	for ev, err := range agent.NewRunner(comp).RunSequential(context.Background(), session, []*agent.Agent{draft, edit}, "start") {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ev.Kind == KindText {
+		if ev.Kind == agent.KindText {
 			text = ev.Text
 		}
 	}
@@ -199,23 +221,23 @@ func TestSequentialPassesText(t *testing.T) {
 }
 
 func TestBeforeToolStopsRun(t *testing.T) {
-	ag := &Agent{
+	ag := &agent.Agent{
 		Name:  "guarded",
 		Model: "grok-test",
-		Tools: []Tool{Func("danger", "nope", nil, func(context.Context, json.RawMessage) (string, error) {
+		Tools: []agent.Tool{agent.Func("danger", "nope", nil, func(context.Context, json.RawMessage) (string, error) {
 			t.Fatal("tool ran")
 			return "", nil
 		})},
-		Hooks: Hooks{BeforeTool: func(context.Context, Call) error {
+		Hooks: agent.Hooks{BeforeTool: func(context.Context, agent.Call) error {
 			return errors.New("blocked")
 		}},
 	}
 	comp := &scripted{fn: func(*xaiapi.GetCompletionsRequest) (*xaiapi.GetChatCompletionResponse, error) {
 		return assistant("", call("c", "danger", `{}`)), nil
 	}}
-	sess := NewSession()
+	sess := agent.NewSession()
 	var got error
-	for _, err := range NewRunner(comp).Run(context.Background(), sess, ag, "go") {
+	for _, err := range agent.NewRunner(comp).Run(context.Background(), sess, ag, "go") {
 		got = err
 	}
 	if got == nil || got.Error() != "blocked" {
@@ -233,7 +255,7 @@ func TestBeforeToolStopsRun(t *testing.T) {
 }
 
 func TestSessionState(t *testing.T) {
-	s := NewSession()
+	s := agent.NewSession()
 	s.Set("city", "Austin")
 	s.Set("tags", map[string]any{"k": "v"})
 	got, ok := s.Get("city")
@@ -250,7 +272,7 @@ func TestSessionState(t *testing.T) {
 }
 
 func TestMemoryStore(t *testing.T) {
-	store := NewMemoryStore()
+	store := agent.NewMemoryStore()
 	loaded, err := store.Load(context.Background(), "abc")
 	if err != nil {
 		t.Fatal(err)

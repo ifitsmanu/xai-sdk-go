@@ -5,8 +5,11 @@ import (
 	"context"
 	"crypto/tls"
 	"log/slog"
+	"net"
+	"net/http"
 	"time"
 
+	"github.com/ifitsmanu/xai-sdk-go/internal/rest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -71,13 +74,21 @@ type Config struct {
 	LogBodies bool
 	Metadata  map[string]string
 	DialOpts  []grpc.DialOption
+	// TLS is the client TLS config. Set Certificates for mTLS.
+	TLS *tls.Config
 }
 
 // Conn is a logged, authenticated gRPC connection.
+// APIKey is kept for the REST calls that the public gRPC API does not expose.
+// It is never written to the log.
 type Conn struct {
-	GRPC    *grpc.ClientConn
-	Timeout time.Duration
-	Logger  *slog.Logger
+	GRPC      *grpc.ClientConn
+	Timeout   time.Duration
+	Logger    *slog.Logger
+	APIKey    string
+	RESTBase  string
+	UserAgent string
+	REST      *rest.Client
 }
 
 // Dial opens a connection. Logger must be non-nil.
@@ -89,7 +100,7 @@ func Dial(cfg Config) (*Conn, error) {
 		cfg.Logger = NopLogger()
 	}
 	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(transportCreds(cfg.Insecure)),
+		grpc.WithTransportCredentials(transportCreds(cfg.Insecure, cfg.TLS)),
 		grpc.WithPerRPCCredentials(apiKeyCredentials{
 			key:      cfg.APIKey,
 			metadata: cfg.Metadata,
@@ -116,7 +127,63 @@ func Dial(cfg Config) (*Conn, error) {
 		return nil, err
 	}
 	cc.Connect()
-	return &Conn{GRPC: cc, Timeout: cfg.Timeout, Logger: cfg.Logger}, nil
+	base := restBase(cfg.Host, cfg.Insecure)
+	httpClient := &http.Client{Transport: httpTransport(cfg.TLS)}
+	return &Conn{
+		GRPC:      cc,
+		Timeout:   cfg.Timeout,
+		Logger:    cfg.Logger,
+		APIKey:    cfg.APIKey,
+		RESTBase:  base,
+		UserAgent: cfg.UserAgent,
+		REST: &rest.Client{
+			Base:      base,
+			Key:       cfg.APIKey,
+			UserAgent: cfg.UserAgent,
+			HTTP:      httpClient,
+			Logger:    cfg.Logger,
+			Timeout:   cfg.Timeout,
+		},
+	}, nil
+}
+
+// GetJSON performs an authenticated REST GET. path is the URL path, such as /v1/models.
+func (c *Conn) GetJSON(ctx context.Context, path string) ([]byte, error) {
+	return c.RESTClient().Do(ctx, http.MethodGet, path, nil)
+}
+
+// CallJSON sends a JSON request to the inference REST API and decodes the response.
+func (c *Conn) CallJSON(ctx context.Context, method, path string, in, out any) error {
+	return c.RESTClient().Call(ctx, method, path, in, out)
+}
+
+// RESTClient is the HTTP client for this connection.
+// A Conn built in tests without Dial still works when RESTBase and APIKey are set.
+func (c *Conn) RESTClient() *rest.Client {
+	if c == nil {
+		return &rest.Client{}
+	}
+	if c.REST != nil {
+		return c.REST
+	}
+	return &rest.Client{
+		Base:      c.RESTBase,
+		Key:       c.APIKey,
+		UserAgent: c.UserAgent,
+		Logger:    c.Logger,
+		Timeout:   c.Timeout,
+	}
+}
+
+func restBase(host string, insecureDial bool) string {
+	scheme := "https"
+	if insecureDial {
+		scheme = "http"
+	}
+	if h, port, err := net.SplitHostPort(host); err == nil && (port == "443" || port == "80") {
+		host = h
+	}
+	return scheme + "://" + host
 }
 
 // Close closes the underlying connection.
@@ -138,9 +205,20 @@ func (c *Conn) Context(ctx context.Context) (context.Context, context.CancelFunc
 	return context.WithTimeout(ctx, c.Timeout)
 }
 
-func transportCreds(insecureDial bool) credentials.TransportCredentials {
+func transportCreds(insecureDial bool, cfg *tls.Config) credentials.TransportCredentials {
 	if insecureDial {
 		return insecure.NewCredentials()
 	}
-	return credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	if cfg == nil {
+		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	return credentials.NewTLS(cfg)
+}
+
+func httpTransport(cfg *tls.Config) *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if cfg != nil {
+		transport.TLSClientConfig = cfg
+	}
+	return transport
 }

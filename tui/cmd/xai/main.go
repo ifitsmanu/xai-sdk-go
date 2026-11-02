@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ifitsmanu/xai-sdk-go"
@@ -24,9 +26,12 @@ func main() {
 			}
 		}()
 	}
+	names := languageModels(client)
 	model := tui.New(tui.Config{
-		Sender: sender,
-		HasKey: hasKey,
+		Sender:    sender,
+		HasKey:    hasKey,
+		Models:    names,
+		ModelName: firstName(names),
 	})
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := program.Run(); err != nil {
@@ -59,4 +64,24 @@ func openClient() (*xai.Client, tui.Sender, bool, error) {
 		return nil, nil, false, err
 	}
 	return client, tui.ClientSender{Client: client}, true, nil
+}
+
+func languageModels(client *xai.Client) []string {
+	if client == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	names, err := client.Models.LanguageNames(ctx)
+	if err != nil {
+		return nil
+	}
+	return names
+}
+
+func firstName(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
 }

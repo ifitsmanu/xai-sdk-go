@@ -63,6 +63,22 @@ func (r *Response) ToolCalls() []*xaiapi.ToolCall {
 	return calls
 }
 
+// Choices is one text per output, in API order. SampleN uses this when n is greater than one.
+func (r *Response) Choices() []string {
+	if r == nil || r.Proto == nil {
+		return nil
+	}
+	out := make([]string, 0, len(r.Proto.Outputs))
+	for _, output := range r.Proto.Outputs {
+		text := ""
+		if output != nil && output.Message != nil {
+			text = output.Message.Content
+		}
+		out = append(out, text)
+	}
+	return out
+}
+
 // Citations lists URLs the model used when search was enabled.
 func (r *Response) Citations() []string {
 	if r == nil || r.Proto == nil {
@@ -99,7 +115,8 @@ type streamBuf struct {
 	encryptedLive bool
 }
 
-func (r *Response) applyChunk(chunk *xaiapi.GetChatCompletionChunk) {
+// ApplyChunk folds one streaming chunk into the response.
+func (r *Response) ApplyChunk(chunk *xaiapi.GetChatCompletionChunk) {
 	if chunk == nil || r == nil || r.Proto == nil {
 		return
 	}
@@ -190,8 +207,8 @@ func (r *Response) appendLive(index int, msg *xaiapi.CompletionMessage, delta *x
 	}
 }
 
-// flush copies buffered stream text into the protobuf once.
-func (r *Response) flush() {
+// Flush copies buffered stream text into the protobuf once.
+func (r *Response) Flush() {
 	if r == nil || r.Proto == nil || len(r.bufs) == 0 {
 		return
 	}

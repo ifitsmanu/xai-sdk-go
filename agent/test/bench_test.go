@@ -1,10 +1,11 @@
-package agent
+package agent_test
 
 import (
 	"context"
 	"encoding/json"
 	"testing"
 
+	"github.com/ifitsmanu/xai-sdk-go/agent"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
 
@@ -20,25 +21,22 @@ func (ready) Complete(_ context.Context, req *xaiapi.GetCompletionsRequest) (*xa
 }
 
 func BenchmarkRun(b *testing.B) {
-	ag := &Agent{
+	ag := &agent.Agent{
 		Name:        "bench",
 		Model:       "grok-test",
 		Instruction: "Be fast.",
-		Tools: []Tool{
-			Func("echo", "Echo", map[string]any{"type": "object"}, func(context.Context, json.RawMessage) (string, error) {
+		Tools: []agent.Tool{
+			agent.Func("echo", "Echo", map[string]any{"type": "object"}, func(context.Context, json.RawMessage) (string, error) {
 				return "ok", nil
 			}),
 		},
 	}
-	if _, _, err := ag.toolSpecs(); err != nil {
-		b.Fatal(err)
-	}
-	runner := NewRunner(ready{})
+	runner := agent.NewRunner(ready{})
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		for _, err := range runner.Run(ctx, NewSession(), ag, "hi") {
+		for _, err := range runner.Run(ctx, agent.NewSession(), ag, "hi") {
 			if err != nil {
 				b.Fatal(err)
 			}

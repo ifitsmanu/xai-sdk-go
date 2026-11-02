@@ -12,9 +12,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Models the composer can cycle through. /model <name> accepts any other id.
-var Models = []string{"grok-4", "grok-4.6", "grok-3"}
-
 const (
 	roleUser role = iota
 	roleAssistant
@@ -51,6 +48,7 @@ func (msg message) reason() string {
 type Config struct {
 	Sender    Sender
 	ModelName string
+	Models    []string
 	HasKey    bool
 	Width     int
 	Height    int
@@ -63,6 +61,7 @@ type Model struct {
 	styles styles
 
 	modelName   string
+	models      []string
 	system      string
 	messages    []message
 	busy        bool
@@ -84,9 +83,10 @@ type Model struct {
 
 // New builds the chat UI. A nil sender still renders; sending explains that.
 func New(cfg Config) *Model {
+	models := cfg.Models
 	name := cfg.ModelName
-	if name == "" {
-		name = Models[0]
+	if name == "" && len(models) > 0 {
+		name = models[0]
 	}
 	input := textarea.New()
 	input.Prompt = "› "
@@ -112,6 +112,7 @@ func New(cfg Config) *Model {
 		hasKey:    cfg.HasKey,
 		styles:    newStyles(),
 		modelName: name,
+		models:    models,
 		follow:    true,
 		width:     cfg.Width,
 		height:    cfg.Height,
@@ -218,6 +219,11 @@ func (m *Model) submit() (tea.Model, tea.Cmd) {
 		m.note("Set XAI_API_KEY to send this.")
 		return m, nil
 	}
+	if m.modelName == "" {
+		m.messages = append(m.messages, message{role: roleUser, body: text})
+		m.note("No model listed. Use /model and an id from the API.")
+		return m, nil
+	}
 	m.help = false
 	m.messages = append(m.messages,
 		message{role: roleUser, body: text},
@@ -249,7 +255,11 @@ func (m *Model) command(text string) {
 		m.help = false
 	case "/model":
 		if len(fields) == 1 {
-			m.modelName = nextModel(m.modelName)
+			if len(m.models) == 0 {
+				m.note("No models listed.")
+				break
+			}
+			m.modelName = m.nextModel()
 			m.note("Model is " + m.modelName + ".")
 		} else {
 			m.modelName = strings.TrimSpace(strings.TrimPrefix(text, "/model"))
@@ -426,11 +436,14 @@ func (m *Model) spinFrame() string {
 	return spinFrames[m.spin%len(spinFrames)]
 }
 
-func nextModel(current string) string {
-	for i, name := range Models {
-		if name == current {
-			return Models[(i+1)%len(Models)]
+func (m *Model) nextModel() string {
+	if len(m.models) == 0 {
+		return m.modelName
+	}
+	for i, name := range m.models {
+		if name == m.modelName {
+			return m.models[(i+1)%len(m.models)]
 		}
 	}
-	return Models[0]
+	return m.models[0]
 }

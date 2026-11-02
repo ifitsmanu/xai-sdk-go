@@ -1,8 +1,9 @@
-package rpc
+package rpc_test
 
 import (
 	"bytes"
 	"context"
+	"github.com/ifitsmanu/xai-sdk-go/internal/rpc"
 	"log/slog"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ import (
 func TestLevelFilter(t *testing.T) {
 	var buf bytes.Buffer
 	base := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	logger := slog.New(LevelHandler{Min: slog.LevelInfo, Next: base})
+	logger := slog.New(rpc.LevelHandler{Min: slog.LevelInfo, Next: base})
 	logger.Debug("hidden")
 	logger.Info("shown", "rpc.method", "/xai_api.Chat/GetCompletion")
 	if strings.Contains(buf.String(), "hidden") {
@@ -30,7 +31,7 @@ func TestLevelFilter(t *testing.T) {
 func TestUnaryLoggerLevels(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	interceptor := UnaryLogger(logger, false)
+	interceptor := rpc.UnaryLogger(logger, false)
 
 	_ = interceptor(context.Background(), "/xai_api.Chat/GetCompletion", nil, nil, nil,
 		func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
@@ -65,7 +66,7 @@ func TestUnaryLoggerLevels(t *testing.T) {
 func TestWarnOnCancel(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	interceptor := UnaryLogger(logger, false)
+	interceptor := rpc.UnaryLogger(logger, false)
 	_ = interceptor(context.Background(), "/xai_api.Models/ListLanguageModels", nil, nil, nil,
 		func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
 			return status.Error(codes.DeadlineExceeded, "timeout")
@@ -77,7 +78,7 @@ func TestWarnOnCancel(t *testing.T) {
 }
 
 func TestNopLogger(t *testing.T) {
-	logger := NopLogger()
+	logger := rpc.NopLogger()
 	if logger.Enabled(context.Background(), slog.LevelError) {
 		t.Fatal("nop logger enabled")
 	}

@@ -65,6 +65,26 @@ func (s *Service) AddRequests(ctx context.Context, req *xaiapi.AddBatchRequestsR
 	return err
 }
 
+// Requests lists metadata for the requests in a batch.
+func (s *Service) Requests(ctx context.Context, req *xaiapi.ListBatchRequestMetadataRequest) (*xaiapi.ListBatchRequestMetadataResponse, error) {
+	ctx, cancel := s.conn.Context(ctx)
+	defer cancel()
+	if req == nil {
+		req = &xaiapi.ListBatchRequestMetadataRequest{}
+	}
+	return s.stub.ListBatchRequestMetadata(ctx, req)
+}
+
+// Result fetches one request result from a batch.
+func (s *Service) Result(ctx context.Context, batchID, requestID string) (*xaiapi.GetBatchRequestResultResponse, error) {
+	ctx, cancel := s.conn.Context(ctx)
+	defer cancel()
+	return s.stub.GetBatchRequestResult(ctx, &xaiapi.GetBatchRequestResultRequest{
+		BatchId:        batchID,
+		BatchRequestId: requestID,
+	})
+}
+
 // Results lists processed results.
 func (s *Service) Results(ctx context.Context, req *xaiapi.ListBatchResultsRequest) (*xaiapi.ListBatchResultsResponse, error) {
 	ctx, cancel := s.conn.Context(ctx)

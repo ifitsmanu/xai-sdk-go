@@ -22,6 +22,12 @@ func NewService(conn *rpc.Conn) *Service {
 	return &Service{conn: conn, stub: xaiapi.NewVideoClient(conn.GRPC)}
 }
 
+// Request starts a text-to-video call.
+// Set Image for image-to-video, Video to edit, or ReferenceImages for reference-to-video.
+func Request(model, prompt string) *xaiapi.GenerateVideoRequest {
+	return &xaiapi.GenerateVideoRequest{Model: model, Prompt: prompt}
+}
+
 // Generate submits a video job and polls until it finishes or the context ends.
 func (s *Service) Generate(ctx context.Context, req *xaiapi.GenerateVideoRequest) (*xaiapi.VideoResponse, error) {
 	ctx, cancel := s.conn.Context(ctx)
@@ -51,6 +57,17 @@ func (s *Service) Start(ctx context.Context, req *xaiapi.GenerateVideoRequest) (
 	ctx, cancel := s.conn.Context(ctx)
 	defer cancel()
 	started, err := s.stub.GenerateVideo(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	return started.GetRequestId(), nil
+}
+
+// StartExtend returns the request id for a video extension without waiting.
+func (s *Service) StartExtend(ctx context.Context, req *xaiapi.ExtendVideoRequest) (string, error) {
+	ctx, cancel := s.conn.Context(ctx)
+	defer cancel()
+	started, err := s.stub.ExtendVideo(ctx, req)
 	if err != nil {
 		return "", err
 	}

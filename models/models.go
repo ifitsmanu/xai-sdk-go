@@ -20,6 +20,33 @@ func NewService(conn *rpc.Conn) *Service {
 	return &Service{conn: conn, stub: xaiapi.NewModelsClient(conn.GRPC)}
 }
 
+// LanguageNames lists the language model ids available to this key, in API order.
+func (s *Service) LanguageNames(ctx context.Context) ([]string, error) {
+	listed, err := s.ListLanguage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ids(listed.GetModels()), nil
+}
+
+// ImageNames lists the image model ids available to this key, in API order.
+func (s *Service) ImageNames(ctx context.Context) ([]string, error) {
+	listed, err := s.ListImage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ids(listed.GetModels()), nil
+}
+
+// EmbeddingNames lists the embedding model ids available to this key, in API order.
+func (s *Service) EmbeddingNames(ctx context.Context) ([]string, error) {
+	listed, err := s.ListEmbedding(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ids(listed.GetModels()), nil
+}
+
 // ListLanguage returns the language models available to the API key.
 func (s *Service) ListLanguage(ctx context.Context) (*xaiapi.ListLanguageModelsResponse, error) {
 	ctx, cancel := s.conn.Context(ctx)
@@ -60,4 +87,14 @@ func (s *Service) Image(ctx context.Context, name string) (*xaiapi.ImageGenerati
 	ctx, cancel := s.conn.Context(ctx)
 	defer cancel()
 	return s.stub.GetImageGenerationModel(ctx, &xaiapi.GetModelRequest{Name: name})
+}
+
+func ids[T interface{ GetName() string }](items []T) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if name := item.GetName(); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }

@@ -31,6 +31,9 @@ type Agent struct {
 	Model       string
 	Instruction string
 	Tools       []Tool
+	// ServerTools run on the xAI side: web search, X search, code execution,
+	// image generation, collections search, and MCP. The runner does not call them.
+	ServerTools []*xaiapi.Tool
 	SubAgents   []*Agent
 	// MaxTurns limits client-side model calls. Zero uses DefaultMaxTurns.
 	MaxTurns int
@@ -93,7 +96,12 @@ func (a *Agent) findSub(name string) *Agent {
 }
 
 func (a *Agent) toolSpecs() ([]*xaiapi.Tool, map[string]Tool, error) {
-	specs := make([]*xaiapi.Tool, 0, len(a.Tools)+1)
+	specs := make([]*xaiapi.Tool, 0, len(a.Tools)+len(a.ServerTools)+1)
+	for _, tool := range a.ServerTools {
+		if tool != nil {
+			specs = append(specs, tool)
+		}
+	}
 	byName := make(map[string]Tool, len(a.Tools)+1)
 	for _, tool := range a.Tools {
 		if tool == nil {

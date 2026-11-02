@@ -43,4 +43,4 @@ $(BUF):
 	chmod +x $(BUF)
 
 bench: ## Time the client and agent hot path
-	go test -bench=. -benchtime=100ms -run '^$$' ./agent ./chat
+	go test -bench=. -benchtime=100ms -run '^$$' ./agent/test ./chat/test

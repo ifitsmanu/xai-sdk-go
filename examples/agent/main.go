@@ -23,9 +23,18 @@ func main() {
 		}
 	}()
 
+	names, err := client.Models.LanguageNames(context.Background())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if len(names) == 0 {
+		fmt.Fprintln(os.Stderr, "no language models")
+		os.Exit(1)
+	}
 	assistant := &agent.Agent{
 		Name:        "assistant",
-		Model:       "grok-4",
+		Model:       names[0],
 		Instruction: "You are a concise assistant. Use tools when they help.",
 		Tools: []agent.Tool{
 			agent.Func("current_time", "Current UTC time.", map[string]any{

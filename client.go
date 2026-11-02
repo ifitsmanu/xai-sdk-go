@@ -1,13 +1,16 @@
 package xai
 
 import (
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net"
 	"os"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/ifitsmanu/xai-sdk-go/account"
 	"github.com/ifitsmanu/xai-sdk-go/agent"
 	"github.com/ifitsmanu/xai-sdk-go/auth"
 	"github.com/ifitsmanu/xai-sdk-go/batch"
@@ -17,10 +20,14 @@ import (
 	"github.com/ifitsmanu/xai-sdk-go/files"
 	"github.com/ifitsmanu/xai-sdk-go/image"
 	"github.com/ifitsmanu/xai-sdk-go/internal/rpc"
+	"github.com/ifitsmanu/xai-sdk-go/manage"
 	"github.com/ifitsmanu/xai-sdk-go/models"
+	"github.com/ifitsmanu/xai-sdk-go/responses"
 	"github.com/ifitsmanu/xai-sdk-go/sample"
+	"github.com/ifitsmanu/xai-sdk-go/skills"
 	"github.com/ifitsmanu/xai-sdk-go/tokenize"
 	"github.com/ifitsmanu/xai-sdk-go/video"
+	"github.com/ifitsmanu/xai-sdk-go/voice"
 	"google.golang.org/grpc"
 )
 
@@ -30,14 +37,20 @@ var ErrNoAPIKey = errors.New("xai: API key is empty; set XAI_API_KEY or use With
 // ErrInsecureHost is returned when WithInsecure is used for a non-loopback host.
 var ErrInsecureHost = errors.New("xai: insecure dial is only allowed for localhost")
 
-// Client is a connection to the xAI API plus one service client per API.
+const (
+	// HostUS keeps inference in the United States. The docs limit which models it serves.
+	HostUS = "us.api.x.ai:443"
+	// HostMTLS is the mutual-TLS host. Use it with WithClientCertificate.
+	HostMTLS = "mtls.api.x.ai:443"
+)
+
+// Client is one connection. Each field is a separate API on that connection.
 type Client struct {
 	conn   *rpc.Conn
 	logger *slog.Logger
 
 	Chat      *chat.Service
-	Image     *image.Service
-	Video     *video.Service
+	Imagine   Imagine
 	Files     *files.Service
 	Models    *models.Service
 	Batch     *batch.Service
@@ -46,6 +59,22 @@ type Client struct {
 	Embed     *embed.Service
 	Documents *documents.Service
 	Sample    *sample.Service
+
+	// REST and WebSocket APIs that are not in the public gRPC protos.
+	Responses *responses.Service
+	Skills    *skills.Service
+	Account   *account.Service
+	Voice     *voice.Service
+
+	// Management is nil until a management key is set.
+	// It talks to management-api.x.ai, not api.x.ai.
+	Management *manage.Client
+}
+
+// Imagine is image and video generation.
+type Imagine struct {
+	Image *image.Service
+	Video *video.Service
 }
 
 // NewClient dials the API. The key comes from WithAPIKey or XAI_API_KEY.
@@ -86,6 +115,13 @@ func NewClient(opts ...Option) (*Client, error) {
 	}
 	logger = logger.With("component", "xai-sdk")
 
+	var tlsCfg *tls.Config
+	if cfg.clientCert != nil {
+		tlsCfg = &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{*cfg.clientCert},
+		}
+	}
 	conn, err := rpc.Dial(rpc.Config{
 		Host:      host,
 		APIKey:    cfg.apiKey,
@@ -96,25 +132,48 @@ func NewClient(opts ...Option) (*Client, error) {
 		LogBodies: cfg.logBodies,
 		Metadata:  sdkMetadata(cfg.metadata),
 		DialOpts:  cfg.dialOpts,
+		TLS:       tlsCfg,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &Client{
-		conn:      conn,
-		logger:    logger,
-		Chat:      chat.NewService(conn),
-		Image:     image.NewService(conn),
-		Video:     video.NewService(conn),
-		Files:     files.NewService(conn),
-		Models:    models.NewService(conn),
-		Batch:     batch.NewService(conn),
-		Auth:      auth.NewService(conn),
-		Tokenize:  tokenize.NewService(conn),
-		Embed:     embed.NewService(conn),
-		Documents: documents.NewService(conn),
-		Sample:    sample.NewService(conn),
+		conn:   conn,
+		logger: logger,
+		Chat:   chat.NewService(conn),
+		Imagine: Imagine{
+			Image: image.NewService(conn),
+			Video: video.NewService(conn),
+		},
+		Files:      files.NewService(conn),
+		Models:     models.NewService(conn),
+		Batch:      batch.NewService(conn),
+		Auth:       auth.NewService(conn),
+		Tokenize:   tokenize.NewService(conn),
+		Embed:      embed.NewService(conn),
+		Documents:  documents.NewService(conn),
+		Sample:     sample.NewService(conn),
+		Responses:  responses.NewService(conn),
+		Skills:     skills.NewService(conn),
+		Account:    account.NewService(conn),
+		Voice:      voice.NewService(conn),
+		Management: managementClient(cfg.managementKey, cfg.timeout, logger),
 	}, nil
+}
+
+func managementClient(key string, timeout time.Duration, logger *slog.Logger) *manage.Client {
+	if key == "" {
+		key = os.Getenv("XAI_MANAGEMENT_API_KEY")
+	}
+	if key == "" {
+		return nil
+	}
+	return manage.New(manage.Config{
+		Key:       key,
+		UserAgent: "xai-sdk-go/" + Version,
+		Logger:    logger,
+		Timeout:   timeout,
+	})
 }
 
 // Close releases the underlying connection.
