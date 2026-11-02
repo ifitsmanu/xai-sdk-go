@@ -41,7 +41,7 @@ type Key struct {
 // Me returns the caller behind the API key.
 func (s *Service) Me(ctx context.Context) (*Me, error) {
 	var me Me
-	if err := s.conn.CallJSON(ctx, http.MethodGet, "/v1/me", nil, &me); err != nil {
+	if err := s.conn.RESTClient().Call(ctx, http.MethodGet, "/v1/me", nil, &me); err != nil {
 		return nil, err
 	}
 	return &me, nil

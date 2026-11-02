@@ -57,7 +57,7 @@ func (s *Audit) Events(ctx context.Context, teamID string, q Query) (json.RawMes
 		path += "?" + encoded
 	}
 	var out json.RawMessage
-	if err := s.c.Call(ctx, http.MethodGet, path, nil, &out); err != nil {
+	if err := s.c.rest.Call(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

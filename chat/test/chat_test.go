@@ -3,7 +3,6 @@ package chat_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/ifitsmanu/xai-sdk-go/chat"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
@@ -67,45 +66,6 @@ func TestStreamAccumulator(t *testing.T) {
 	}
 	if resp.Content() != "Hello world" {
 		t.Fatalf("content after flush = %q", resp.Content())
-	}
-}
-
-func TestServerToolConfigs(t *testing.T) {
-	web := chat.WebSearch(chat.WebSearchConfig{
-		AllowedDomains:     []string{"x.ai"},
-		ImageUnderstanding: true,
-		Country:            "US",
-		City:               "Austin",
-	}).GetWebSearch()
-	if web.GetEnableImageUnderstanding() != true || web.GetUserLocation().GetCity() != "Austin" {
-		t.Fatalf("web = %+v", web)
-	}
-	if web.GetEnableImageSearch() {
-		t.Fatal("image search was set")
-	}
-
-	when := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
-	x := chat.XSearch(chat.XSearchConfig{From: when, AllowedHandles: []string{"xai"}, VideoUnderstanding: true}).GetXSearch()
-	if x.GetFromDate().AsTime().UTC() != when || !x.GetEnableVideoUnderstanding() {
-		t.Fatalf("x = %+v", x)
-	}
-
-	collections := chat.CollectionsSearch(chat.CollectionsSearchConfig{
-		CollectionIDs: []string{"c1"},
-		Retrieval:     "semantic",
-		Instructions:  "recent",
-	}).GetCollectionsSearch()
-	if collections.GetSemanticRetrieval() == nil || collections.GetInstructions() != "recent" {
-		t.Fatalf("collections = %+v", collections)
-	}
-
-	mcp := chat.MCP(chat.MCPConfig{
-		ServerURL:     "https://example.com/mcp",
-		Authorization: "token",
-		ExtraHeaders:  map[string]string{"X-Test": "1"},
-	}).GetMcp()
-	if mcp.GetServerUrl() != "https://example.com/mcp" || mcp.GetExtraHeaders()["X-Test"] != "1" {
-		t.Fatalf("mcp = %+v", mcp)
 	}
 }
 

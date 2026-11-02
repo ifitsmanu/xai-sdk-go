@@ -168,16 +168,6 @@ func Dial(cfg Config) (*Conn, error) {
 	}, nil
 }
 
-// GetJSON performs an authenticated REST GET. path is the URL path, such as /v1/models.
-func (c *Conn) GetJSON(ctx context.Context, path string) ([]byte, error) {
-	return c.RESTClient().Do(ctx, http.MethodGet, path, nil)
-}
-
-// CallJSON sends a JSON request to the inference REST API and decodes the response.
-func (c *Conn) CallJSON(ctx context.Context, method, path string, in, out any) error {
-	return c.RESTClient().Call(ctx, method, path, in, out)
-}
-
 // RESTClient is the HTTP client for this connection.
 // A Conn built in tests without Dial still works when RESTBase and APIKey are set.
 func (c *Conn) RESTClient() *rest.Client {

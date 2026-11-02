@@ -115,7 +115,7 @@ func TestRunnerExecutesToolThenAnswers(t *testing.T) {
 }
 
 func TestServerToolsAreSent(t *testing.T) {
-	web := chat.WebSearch(chat.WebSearchConfig{AllowedDomains: []string{"x.ai"}})
+	web := chat.WebSearch(&xaiapi.WebSearch{AllowedDomains: []string{"x.ai"}})
 	ag := &agent.Agent{
 		Name:        "search",
 		Model:       "grok-test",

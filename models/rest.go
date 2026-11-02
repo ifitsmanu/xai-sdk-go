@@ -2,8 +2,9 @@ package models
 
 import (
 	"context"
-	"encoding/json"
-	"net/url"
+	"net/http"
+
+	"github.com/ifitsmanu/xai-sdk-go/internal/rest"
 )
 
 // VideoModel is one video generation model from GET /v1/video-generation-models.
@@ -57,45 +58,26 @@ type ImagePrice struct {
 
 // All lists every model this key can call, from the REST models API.
 func (s *Service) All(ctx context.Context) ([]ListedModel, error) {
-	body, err := s.conn.GetJSON(ctx, "/v1/models")
-	if err != nil {
-		return nil, err
-	}
 	var page struct {
 		Data []ListedModel `json:"data"`
 	}
-	if err := json.Unmarshal(body, &page); err != nil {
-		return nil, err
-	}
-	return page.Data, nil
+	err := s.conn.RESTClient().Call(ctx, http.MethodGet, "/v1/models", nil, &page)
+	return page.Data, err
 }
 
 // ListVideo lists the video generation models this key can call.
 func (s *Service) ListVideo(ctx context.Context) ([]VideoModel, error) {
-	body, err := s.conn.GetJSON(ctx, "/v1/video-generation-models")
-	if err != nil {
-		return nil, err
-	}
 	var page struct {
 		Models []VideoModel `json:"models"`
 	}
-	if err := json.Unmarshal(body, &page); err != nil {
-		return nil, err
-	}
-	return page.Models, nil
+	err := s.conn.RESTClient().Call(ctx, http.MethodGet, "/v1/video-generation-models", nil, &page)
+	return page.Models, err
 }
 
 // Video returns one video generation model.
 func (s *Service) Video(ctx context.Context, id string) (*VideoModel, error) {
-	body, err := s.conn.GetJSON(ctx, "/v1/video-generation-models/"+url.PathEscape(id))
-	if err != nil {
-		return nil, err
-	}
 	var model VideoModel
-	if err := json.Unmarshal(body, &model); err != nil {
-		return nil, err
-	}
-	return &model, nil
+	return &model, s.conn.RESTClient().Call(ctx, http.MethodGet, rest.Path("/v1/video-generation-models", id), nil, &model)
 }
 
 // VideoNames lists video model ids in API order.

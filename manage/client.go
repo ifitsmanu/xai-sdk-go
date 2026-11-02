@@ -3,7 +3,6 @@
 package manage
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -60,9 +59,4 @@ func New(cfg Config) *Client {
 	c.Audit = &Audit{c: c}
 	c.Auth = &Auth{c: c}
 	return c
-}
-
-// Call sends a JSON request to a documented management path and decodes the body.
-func (c *Client) Call(ctx context.Context, method, path string, in, out any) error {
-	return c.rest.Call(ctx, method, path, in, out)
 }

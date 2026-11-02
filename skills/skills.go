@@ -51,7 +51,7 @@ func (s *Service) List(ctx context.Context, limit int, after, order string) (*Pa
 		q.Set("limit", strconv.Itoa(limit))
 	}
 	var page Page
-	if err := s.conn.CallJSON(ctx, http.MethodGet, rest.Query("/v1/skills", q), nil, &page); err != nil {
+	if err := s.conn.RESTClient().Call(ctx, http.MethodGet, rest.Query("/v1/skills", q), nil, &page); err != nil {
 		return nil, err
 	}
 	return &page, nil
@@ -60,7 +60,7 @@ func (s *Service) List(ctx context.Context, limit int, after, order string) (*Pa
 // Get returns one skill.
 func (s *Service) Get(ctx context.Context, id string) (*Skill, error) {
 	var skill Skill
-	if err := s.conn.CallJSON(ctx, http.MethodGet, rest.Path("/v1/skills", id), nil, &skill); err != nil {
+	if err := s.conn.RESTClient().Call(ctx, http.MethodGet, rest.Path("/v1/skills", id), nil, &skill); err != nil {
 		return nil, err
 	}
 	return &skill, nil
@@ -76,7 +76,7 @@ type Deleted struct {
 // Delete removes a skill.
 func (s *Service) Delete(ctx context.Context, id string) (*Deleted, error) {
 	var out Deleted
-	if err := s.conn.CallJSON(ctx, http.MethodDelete, rest.Path("/v1/skills", id), nil, &out); err != nil {
+	if err := s.conn.RESTClient().Call(ctx, http.MethodDelete, rest.Path("/v1/skills", id), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

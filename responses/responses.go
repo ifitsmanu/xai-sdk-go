@@ -107,7 +107,7 @@ func (s *Service) Get(ctx context.Context, id string) (*Response, error) {
 
 // Delete removes a stored response.
 func (s *Service) Delete(ctx context.Context, id string) error {
-	return s.conn.CallJSON(ctx, http.MethodDelete, rest.Path("/v1/responses", id), nil, nil)
+	return s.conn.RESTClient().Call(ctx, http.MethodDelete, rest.Path("/v1/responses", id), nil, nil)
 }
 
 // InputItems lists the input items stored for a response. Zero and empty values use server defaults.

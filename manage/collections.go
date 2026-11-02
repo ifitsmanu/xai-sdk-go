@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+
+	"github.com/ifitsmanu/xai-sdk-go/internal/rest"
 )
 
 // Collections manages collections on the management host.
@@ -75,47 +77,47 @@ func (s *Collections) List(ctx context.Context) (json.RawMessage, error) {
 
 // Get returns one collection.
 func (s *Collections) Get(ctx context.Context, id string) (*Collection, error) {
-	return s.decode(ctx, http.MethodGet, "/v1/collections/"+id, nil)
+	return s.decode(ctx, http.MethodGet, rest.Path("/v1/collections", id), nil)
 }
 
 // Delete deletes a collection.
 func (s *Collections) Delete(ctx context.Context, id string) error {
-	return s.c.Call(ctx, http.MethodDelete, "/v1/collections/"+id, nil, nil)
+	return s.c.rest.Call(ctx, http.MethodDelete, rest.Path("/v1/collections", id), nil, nil)
 }
 
 // Update sends PUT /v1/collections/{id}. body is the documented update object.
 func (s *Collections) Update(ctx context.Context, id string, body any) (*Collection, error) {
-	return s.decode(ctx, http.MethodPut, "/v1/collections/"+id, body)
+	return s.decode(ctx, http.MethodPut, rest.Path("/v1/collections", id), body)
 }
 
 // AddDocument sends POST /v1/collections/{id}/documents/{fileID}.
 func (s *Collections) AddDocument(ctx context.Context, collectionID, fileID string, body any) (json.RawMessage, error) {
-	return s.raw(ctx, http.MethodPost, "/v1/collections/"+collectionID+"/documents/"+fileID, body)
+	return s.raw(ctx, http.MethodPost, rest.Path("/v1/collections", collectionID, "documents", fileID), body)
 }
 
 // Documents lists documents in a collection.
 func (s *Collections) Documents(ctx context.Context, collectionID string) (json.RawMessage, error) {
-	return s.raw(ctx, http.MethodGet, "/v1/collections/"+collectionID+"/documents", nil)
+	return s.raw(ctx, http.MethodGet, rest.Path("/v1/collections", collectionID, "documents"), nil)
 }
 
 // Document returns one document.
 func (s *Collections) Document(ctx context.Context, collectionID, fileID string) (json.RawMessage, error) {
-	return s.raw(ctx, http.MethodGet, "/v1/collections/"+collectionID+"/documents/"+fileID, nil)
+	return s.raw(ctx, http.MethodGet, rest.Path("/v1/collections", collectionID, "documents", fileID), nil)
 }
 
 // UpdateDocument sends PATCH /v1/collections/{id}/documents/{fileID}.
 func (s *Collections) UpdateDocument(ctx context.Context, collectionID, fileID string, body any) (json.RawMessage, error) {
-	return s.raw(ctx, http.MethodPatch, "/v1/collections/"+collectionID+"/documents/"+fileID, body)
+	return s.raw(ctx, http.MethodPatch, rest.Path("/v1/collections", collectionID, "documents", fileID), body)
 }
 
 // RemoveDocument removes a document from a collection.
 func (s *Collections) RemoveDocument(ctx context.Context, collectionID, fileID string) error {
-	return s.c.Call(ctx, http.MethodDelete, "/v1/collections/"+collectionID+"/documents/"+fileID, nil, nil)
+	return s.c.rest.Call(ctx, http.MethodDelete, rest.Path("/v1/collections", collectionID, "documents", fileID), nil, nil)
 }
 
 // BatchGetDocuments sends GET /v1/collections/{id}/documents:batchGet.
 func (s *Collections) BatchGetDocuments(ctx context.Context, collectionID string) (json.RawMessage, error) {
-	return s.raw(ctx, http.MethodGet, "/v1/collections/"+collectionID+"/documents:batchGet", nil)
+	return s.raw(ctx, http.MethodGet, rest.Path("/v1/collections", collectionID, "documents:batchGet"), nil)
 }
 
 func (s *Collections) decode(ctx context.Context, method, path string, in any) (*Collection, error) {
@@ -133,7 +135,7 @@ func (s *Collections) decode(ctx context.Context, method, path string, in any) (
 
 func (s *Collections) raw(ctx context.Context, method, path string, in any) (json.RawMessage, error) {
 	var out json.RawMessage
-	if err := s.c.Call(ctx, method, path, in, &out); err != nil {
+	if err := s.c.rest.Call(ctx, method, path, in, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

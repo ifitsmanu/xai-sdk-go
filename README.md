@@ -65,10 +65,10 @@ Server tools go on the same chat. Your functions run locally. Web search, X sear
 
 ```go
 Tools: []*xaiapi.Tool{
-    chat.WebSearch(chat.WebSearchConfig{}),
+    chat.WebSearch(nil),
     chat.CodeExecution(),
-    chat.ImageGeneration(""),
-    chat.MCP(chat.MCPConfig{ServerURL: serverURL}),
+    chat.ImageGeneration(nil),
+    chat.MCP(&xaiapi.MCP{ServerUrl: serverURL}),
 },
 ```
 
@@ -77,11 +77,11 @@ Image models come from gRPC. Video models come from `GET /v1/video-generation-mo
 ```go
 images, err := client.Models.ImageNames(ctx)
 videos, err := client.Models.VideoNames(ctx)
-client.Imagine.Image.Generate(ctx, image.Request(images[0], "a red cube"))
-client.Imagine.Video.Generate(ctx, video.Request(videos[0], "a red cube spinning"))
+client.Imagine.Image.Generate(ctx, &xaiapi.GenerateImageRequest{Model: images[0], Prompt: "a red cube"})
+client.Imagine.Video.Generate(ctx, &xaiapi.GenerateVideoRequest{Model: videos[0], Prompt: "a red cube spinning"})
 ```
 
-Set `Image` to `image.URL` or `image.File` to edit. On a video request, `Image` is the first frame, `Video` edits, `ReferenceImages` is reference-to-video, and `LastFrame` and `Keyframes` pin frames. `image.Store` and the same storage field on video keep the file. `batch.Image`, `batch.Video`, and `batch.Completion` wrap those requests for `Batch.AddRequests`. `Chat.SampleN` asks for several completions. `Chat.Compact` replaces the transcript with the compaction result.
+Set `Image` to `image.URL` or `image.File` to edit. On a video request, `Image` is the first frame, `Video` edits, `ReferenceImages` is reference-to-video, and `LastFrame` and `Keyframes` pin frames. Set `StorageOptions` on either request to keep the file. `batch.Image`, `batch.Video`, and `batch.Completion` wrap those requests for `Batch.AddRequests`. `Chat.SampleN` asks for several completions. `Chat.Compact` replaces the transcript with the compaction result.
 
 ## Agent
 
@@ -92,7 +92,7 @@ assistant := &agent.Agent{
 	Name:        "assistant",
 	Model:       names[0],
 	Instruction: "You are concise. Use tools when they help.",
-	ServerTools: []*xaiapi.Tool{chat.WebSearch(chat.WebSearchConfig{})},
+	ServerTools: []*xaiapi.Tool{chat.WebSearch(nil)},
 }
 
 session := agent.NewSession()
