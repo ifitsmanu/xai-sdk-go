@@ -75,26 +75,85 @@ func TestAccountAndModels(t *testing.T) {
 
 func TestResponsesCreateAndStream(t *testing.T) {
 	c, ctx := client(t)
-	model := languageModel(t, c, ctx)
 	store := false
-	req := responses.Request{Model: model, Input: "Reply with one word: hello", Store: &store}
+	req := responses.Request{Model: languageModel(t, c, ctx), Input: responses.Text("Reply with one word: hello"), Store: &store}
 	resp, err := c.Responses.Create(ctx, req)
-	if err != nil || resp.Text() == "" {
+	if err != nil || resp.Text() == "" || resp.Usage == nil || resp.Usage.TotalTokens == 0 {
 		t.Fatalf("create = %+v, err = %v", resp, err)
 	}
+	t.Logf("cost $%.6f", resp.Usage.USD())
 	var text strings.Builder
+	var final *responses.Response
 	for event, err := range c.Responses.Stream(ctx, req) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var e struct{ Type, Delta string }
-		if json.Unmarshal(event, &e) == nil && e.Type == "response.output_text.delta" {
-			text.WriteString(e.Delta)
+		switch event.Type {
+		case "response.output_text.delta":
+			text.WriteString(event.Delta)
+		case "response.completed":
+			final = event.Response
 		}
 	}
-	if text.Len() == 0 {
-		t.Fatal("stream produced no text")
+	if text.Len() == 0 || final == nil || final.Text() != text.String() {
+		t.Fatalf("streamed %q, final %+v", text.String(), final)
 	}
+}
+
+// The model calls a client function, gets the result, and answers with it.
+func TestResponsesFunctionCallTurn(t *testing.T) {
+	c, ctx := client(t)
+	req := responses.Request{
+		Model: languageModel(t, c, ctx),
+		Input: responses.Items{responses.UserText("What is the secret code? Use the tool.")},
+		Tools: []responses.Tool{responses.Function{
+			Name:        "secret_code",
+			Description: "Returns the secret code.",
+			Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		}},
+		ToolChoice: &responses.ToolChoice{Function: "secret_code"},
+	}
+	first, err := c.Responses.Create(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := first.FunctionCalls()
+	if len(calls) != 1 || calls[0].Name != "secret_code" {
+		t.Fatalf("calls = %+v", first.Output)
+	}
+	items := append(req.Input.(responses.Items), first.Output...)
+	items = append(items, &responses.FunctionOutput{CallID: calls[0].CallID, Output: "PINEAPPLE-42"})
+	req.Input, req.ToolChoice = items, nil
+	second, err := c.Responses.Create(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(second.Text(), "PINEAPPLE-42") {
+		t.Fatalf("answer %q does not use the tool result", second.Text())
+	}
+}
+
+// Server-side web search with domain filters, the shape the API reference documents.
+func TestResponsesWebSearch(t *testing.T) {
+	c, ctx := client(t)
+	resp, err := c.Responses.Create(ctx, responses.Request{
+		Model: languageModel(t, c, ctx),
+		Input: responses.Text("Search the web: what is the title of the page at docs.x.ai? Answer in a few words."),
+		Tools: []responses.Tool{responses.WebSearch{Filters: &responses.SearchFilters{AllowedDomains: []string{"docs.x.ai"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	searched := false
+	for _, item := range resp.Output {
+		if o, ok := item.(*responses.OtherItem); ok && o.Type == "web_search_call" {
+			searched = true
+		}
+	}
+	if !searched || resp.Text() == "" {
+		t.Fatalf("searched=%v text=%q output=%d items", searched, resp.Text(), len(resp.Output))
+	}
+	t.Logf("server tools used %d, cost $%.6f", resp.Usage.NumServerSideToolsUsed, resp.Usage.USD())
 }
 
 func TestSpeakAndTranscribe(t *testing.T) {

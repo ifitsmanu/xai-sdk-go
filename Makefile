@@ -28,7 +28,7 @@ test: ## Run tests with the race detector
 cover: ## Coverage of the SDK packages. Tests live in test/ folders, so -coverpkg is required
 	go test -coverpkg=./... -coverprofile=cover.out ./... >/dev/null && go tool cover -func=cover.out | tail -1
 
-live: ## Call the real API with XAI_API_KEY. Costs a few cents
+live: ## Call the real API with XAI_API_KEY from .env. About $0.10 a run
 	go test -tags live -count=1 -v ./test/live/
 
 vuln: ## Check dependencies and the toolchain for known vulnerabilities

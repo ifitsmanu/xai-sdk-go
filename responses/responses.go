@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"iter"
 	"net/http"
 	"net/url"
@@ -28,75 +27,8 @@ func NewService(conn *rpc.Conn) *Service {
 	return &Service{conn: conn}
 }
 
-// Request is a POST /v1/responses body.
-// Input is a string or a list of input items. Leave pointer fields nil to omit them.
-type Request struct {
-	Model              string          `json:"model,omitempty"`
-	Input              any             `json:"input,omitempty"`
-	Instructions       *string         `json:"instructions,omitempty"`
-	MaxOutputTokens    *int            `json:"max_output_tokens,omitempty"`
-	MaxTurns           *int            `json:"max_turns,omitempty"`
-	Temperature        *float64        `json:"temperature,omitempty"`
-	TopP               *float64        `json:"top_p,omitempty"`
-	Store              *bool           `json:"store,omitempty"`
-	Stream             *bool           `json:"stream,omitempty"`
-	PreviousResponseID *string         `json:"previous_response_id,omitempty"`
-	SafetyIdentifier   *string         `json:"safety_identifier,omitempty"`
-	User               *string         `json:"user,omitempty"`
-	ReasoningEffort    *string         `json:"reasoning_effort,omitempty"`
-	ServiceTier        *string         `json:"service_tier,omitempty"`
-	Tools              json.RawMessage `json:"tools,omitempty"`
-	ToolChoice         json.RawMessage `json:"tool_choice,omitempty"`
-	Text               json.RawMessage `json:"text,omitempty"`
-	Reasoning          json.RawMessage `json:"reasoning,omitempty"`
-	Metadata           json.RawMessage `json:"metadata,omitempty"`
-	Include            []string        `json:"include,omitempty"`
-}
-
-// Response is a stored or created model response.
-type Response struct {
-	ID     string            `json:"id"`
-	Model  string            `json:"model"`
-	Status string            `json:"status"`
-	Output []json.RawMessage `json:"output"`
-	Raw    json.RawMessage   `json:"-"`
-}
-
-// Text joins output_text parts from the output items.
-func (r *Response) Text() string {
-	if r == nil {
-		return ""
-	}
-	var b strings.Builder
-	for _, item := range r.Output {
-		var msg struct {
-			Type    string `json:"type"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(item, &msg); err != nil {
-			continue
-		}
-		if msg.Text != "" && (msg.Type == "output_text" || msg.Type == "") {
-			b.WriteString(msg.Text)
-		}
-		for _, part := range msg.Content {
-			if part.Type == "output_text" || part.Type == "text" || part.Type == "" {
-				b.WriteString(part.Text)
-			}
-		}
-	}
-	return b.String()
-}
-
-// Create sends a response request. For a streamed body, use Stream.
+// Create sends a request and waits for the whole response. Use Stream for tokens as they arrive.
 func (s *Service) Create(ctx context.Context, req Request) (*Response, error) {
-	if req.Stream != nil && *req.Stream {
-		return nil, errors.New("xai: use Responses.Stream for a streaming response")
-	}
 	return s.do(ctx, http.MethodPost, "/v1/responses", req)
 }
 
@@ -110,32 +42,53 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	return s.conn.RESTClient().Call(ctx, http.MethodDelete, rest.Path("/v1/responses", id), nil, nil)
 }
 
+// ItemPage is one page of stored input items.
+type ItemPage struct {
+	Items   []Item
+	FirstID string
+	LastID  string
+	HasMore bool
+}
+
 // InputItems lists the input items stored for a response. Zero and empty values use server defaults.
-func (s *Service) InputItems(ctx context.Context, id string, limit int, after, order string) (json.RawMessage, error) {
+func (s *Service) InputItems(ctx context.Context, id string, limit int, after, order string) (*ItemPage, error) {
 	q := url.Values{"after": {after}, "order": {order}}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
 	}
-	return s.conn.RESTClient().Do(ctx, http.MethodGet, rest.Query(rest.Path("/v1/responses", id, "input_items"), q), nil)
+	var wire struct {
+		Data    []json.RawMessage `json:"data"`
+		FirstID string            `json:"first_id"`
+		LastID  string            `json:"last_id"`
+		HasMore bool              `json:"has_more"`
+	}
+	if err := s.conn.RESTClient().Call(ctx, http.MethodGet, rest.Query(rest.Path("/v1/responses", id, "input_items"), q), nil, &wire); err != nil {
+		return nil, err
+	}
+	page := &ItemPage{FirstID: wire.FirstID, LastID: wire.LastID, HasMore: wire.HasMore}
+	for _, raw := range wire.Data {
+		item, err := decodeItem(raw)
+		if err != nil {
+			return nil, err
+		}
+		page.Items = append(page.Items, item)
+	}
+	return page, nil
 }
 
-// CompactRequest is a POST /v1/responses/compact body.
-type CompactRequest struct {
-	Model string `json:"model"`
-	Input any    `json:"input"`
+// Compact shortens a conversation. Send the returned output as the next input.
+func (s *Service) Compact(ctx context.Context, model string, input Input) (*Response, error) {
+	return s.do(ctx, http.MethodPost, "/v1/responses/compact", map[string]any{"model": model, "input": input})
 }
 
-// Compact shortens a Responses input window.
-func (s *Service) Compact(ctx context.Context, req CompactRequest) (*Response, error) {
-	return s.do(ctx, http.MethodPost, "/v1/responses/compact", req)
-}
-
-// Stream sends a response request with stream set and yields SSE data payloads.
-func (s *Service) Stream(ctx context.Context, req Request) iter.Seq2[json.RawMessage, error] {
-	on := true
-	req.Stream = &on
-	return func(yield func(json.RawMessage, error) bool) {
-		body, err := rest.JSON(req)
+// Stream sends a request and yields events as the server sends them.
+// The response.completed event carries the whole response.
+func (s *Service) Stream(ctx context.Context, req Request) iter.Seq2[*Event, error] {
+	return func(yield func(*Event, error) bool) {
+		body, err := rest.JSON(struct {
+			Request
+			Stream bool `json:"stream"`
+		}{req, true})
 		if err != nil {
 			yield(nil, err)
 			return
@@ -147,7 +100,7 @@ func (s *Service) Stream(ctx context.Context, req Request) iter.Seq2[json.RawMes
 		}
 		defer func() { _ = resp.Body.Close() }()
 		sc := bufio.NewScanner(resp.Body)
-		sc.Buffer(make([]byte, 64<<10), int(s.conn.RESTClient().Limit())) // response.completed carries the whole response
+		sc.Buffer(make([]byte, 64<<10), int(s.conn.RESTClient().Limit()))
 		for sc.Scan() {
 			data, ok := strings.CutPrefix(sc.Text(), "data:")
 			if !ok {
@@ -157,7 +110,15 @@ func (s *Service) Stream(ctx context.Context, req Request) iter.Seq2[json.RawMes
 			if data == "[DONE]" {
 				return
 			}
-			if data != "" && !yield(json.RawMessage(data), nil) {
+			if data == "" {
+				continue
+			}
+			var event Event
+			if err := json.Unmarshal([]byte(data), &event); err != nil {
+				yield(nil, err)
+				return
+			}
+			if !yield(&event, nil) {
 				return
 			}
 		}
@@ -167,30 +128,45 @@ func (s *Service) Stream(ctx context.Context, req Request) iter.Seq2[json.RawMes
 	}
 }
 
-// Dial opens the Responses WebSocket at /v1/responses.
-// Each turn is a response.create message with the same body as Create, without stream or background.
+// Dial opens the Responses WebSocket at /v1/responses for low-latency multi-turn use.
 func (s *Service) Dial(ctx context.Context) (*Socket, error) {
 	ws, err := s.conn.DialWS(ctx, "/v1/responses")
 	if err != nil {
 		return nil, err
 	}
-	return &Socket{Conn: ws}, nil
+	return &Socket{conn: ws}, nil
 }
 
-// Socket is one Responses WebSocket. Each turn is a response.create event.
+// Socket is one Responses WebSocket.
 type Socket struct {
-	*wsx.Conn
+	conn *wsx.Conn
 }
 
-func (s *Service) do(ctx context.Context, method, path string, in any) (*Response, error) {
-	raw, err := s.conn.RESTClient().Do(ctx, method, path, in)
+// Create starts a turn. Read its events with Next until response.completed.
+func (s *Socket) Create(ctx context.Context, req Request) error {
+	return s.conn.Send(ctx, struct {
+		Type string `json:"type"`
+		Request
+	}{"response.create", req})
+}
+
+// Next reads the next event. It returns io.EOF after the server closes.
+func (s *Socket) Next(ctx context.Context) (*Event, error) {
+	raw, err := s.conn.Recv(ctx)
 	if err != nil {
 		return nil, err
 	}
+	var event Event
+	return &event, json.Unmarshal(raw, &event)
+}
+
+// Close closes the socket.
+func (s *Socket) Close() error { return s.conn.Close() }
+
+func (s *Service) do(ctx context.Context, method, path string, in any) (*Response, error) {
 	var resp Response
-	if err := json.Unmarshal(raw, &resp); err != nil {
+	if err := s.conn.RESTClient().Call(ctx, method, path, in, &resp); err != nil {
 		return nil, err
 	}
-	resp.Raw = json.RawMessage(raw)
 	return &resp, nil
 }
