@@ -31,6 +31,9 @@ type Config struct {
 	Logger    *slog.Logger
 	Timeout   time.Duration
 	HTTP      *http.Client
+	// MaxBody and Attempts behave as the inference client's options.
+	MaxBody  int64
+	Attempts int
 }
 
 // New returns a client. The key is not logged.
@@ -48,6 +51,8 @@ func New(cfg Config) *Client {
 		HTTP:      cfg.HTTP,
 		Logger:    cfg.Logger,
 		Timeout:   cfg.Timeout,
+		MaxBody:   cfg.MaxBody,
+		Attempts:  cfg.Attempts,
 	}
 	c := &Client{rest: rc}
 	c.Collections = &Collections{c: c}

@@ -29,7 +29,9 @@ func TestInsecureRequiresLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.Close()
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestLogLevelFiltersClientLogger(t *testing.T) {

@@ -1,6 +1,7 @@
 package xai
 
 import (
+	"cmp"
 	"crypto/tls"
 	"errors"
 	"log/slog"
@@ -8,7 +9,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/ifitsmanu/xai-sdk-go/account"
 	"github.com/ifitsmanu/xai-sdk-go/agent"
@@ -123,16 +123,18 @@ func NewClient(opts ...Option) (*Client, error) {
 		}
 	}
 	conn, err := rpc.Dial(rpc.Config{
-		Host:      host,
-		APIKey:    cfg.apiKey,
-		Insecure:  cfg.insecure,
-		Timeout:   cfg.timeout,
-		UserAgent: "xai-sdk-go/" + Version,
-		Logger:    logger,
-		LogBodies: cfg.logBodies,
-		Metadata:  sdkMetadata(cfg.metadata),
-		DialOpts:  cfg.dialOpts,
-		TLS:       tlsCfg,
+		Host:           host,
+		APIKey:         cfg.apiKey,
+		Insecure:       cfg.insecure,
+		Timeout:        cfg.timeout,
+		UserAgent:      "xai-sdk-go/" + Version,
+		Logger:         logger,
+		LogBodies:      cfg.logBodies,
+		Metadata:       sdkMetadata(cfg.metadata),
+		DialOpts:       cfg.dialOpts,
+		TLS:            tlsCfg,
+		MaxMessageSize: cfg.maxMessage,
+		Attempts:       cfg.attempts,
 	})
 	if err != nil {
 		return nil, err
@@ -157,11 +159,12 @@ func NewClient(opts ...Option) (*Client, error) {
 		Skills:     skills.NewService(conn),
 		Account:    account.NewService(conn),
 		Voice:      voice.NewService(conn),
-		Management: managementClient(cfg.managementKey, cfg.timeout, logger),
+		Management: managementClient(cfg, logger),
 	}, nil
 }
 
-func managementClient(key string, timeout time.Duration, logger *slog.Logger) *manage.Client {
+func managementClient(cfg options, logger *slog.Logger) *manage.Client {
+	key := cfg.managementKey
 	if key == "" {
 		key = os.Getenv("XAI_MANAGEMENT_API_KEY")
 	}
@@ -172,7 +175,9 @@ func managementClient(key string, timeout time.Duration, logger *slog.Logger) *m
 		Key:       key,
 		UserAgent: "xai-sdk-go/" + Version,
 		Logger:    logger,
-		Timeout:   timeout,
+		Timeout:   cfg.timeout,
+		MaxBody:   int64(cfg.maxMessage),
+		Attempts:  cmp.Or(cfg.attempts, rpc.DefaultAttempts),
 	})
 }
 

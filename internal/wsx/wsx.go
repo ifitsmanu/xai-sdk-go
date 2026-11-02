@@ -4,6 +4,9 @@ package wsx
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 
 	"github.com/coder/websocket"
@@ -15,7 +18,9 @@ type Conn struct {
 }
 
 // Dial opens a WebSocket. key is sent as a bearer token and is not logged.
-func Dial(ctx context.Context, url, key, userAgent string) (*Conn, error) {
+// readLimit is the largest message accepted. Realtime audio deltas exceed 100 KB,
+// so the library default of 32 KiB is too small.
+func Dial(ctx context.Context, url, key, userAgent string, readLimit int64) (*Conn, error) {
 	header := http.Header{}
 	if key != "" {
 		header.Set("Authorization", "Bearer "+key)
@@ -27,6 +32,7 @@ func Dial(ctx context.Context, url, key, userAgent string) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	ws.SetReadLimit(readLimit)
 	return &Conn{ws: ws}, nil
 }
 
@@ -39,19 +45,39 @@ func (c *Conn) Send(ctx context.Context, v any) error {
 	return c.ws.Write(ctx, websocket.MessageText, raw)
 }
 
-// Recv reads the next text message.
+// SendBinary writes one binary message, such as raw audio.
+func (c *Conn) SendBinary(ctx context.Context, data []byte) error {
+	return c.ws.Write(ctx, websocket.MessageBinary, data)
+}
+
+// Recv reads the next message. A normal close from the server returns io.EOF.
 func (c *Conn) Recv(ctx context.Context) (json.RawMessage, error) {
 	_, raw, err := c.ws.Read(ctx)
 	if err != nil {
+		if closedNormally(err) {
+			return nil, io.EOF
+		}
 		return nil, err
 	}
 	return json.RawMessage(raw), nil
 }
 
-// Close closes the socket.
+// Close closes the socket. A socket the server already closed is not an error.
 func (c *Conn) Close() error {
 	if c == nil || c.ws == nil {
 		return nil
 	}
-	return c.ws.Close(websocket.StatusNormalClosure, "")
+	err := c.ws.Close(websocket.StatusNormalClosure, "")
+	if err == nil || closedNormally(err) {
+		return nil
+	}
+	return err
+}
+
+func closedNormally(err error) bool {
+	switch websocket.CloseStatus(err) {
+	case websocket.StatusNormalClosure, websocket.StatusGoingAway:
+		return true
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed)
 }

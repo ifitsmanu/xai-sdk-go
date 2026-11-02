@@ -1,4 +1,4 @@
-// Package voice covers speech, transcription, and the realtime WebSocket.
+// Package voice covers speech, transcription, and the realtime WebSockets.
 // These endpoints are REST and WebSocket. They are not in the public gRPC protos.
 package voice
 
@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -27,233 +27,188 @@ func NewService(conn *rpc.Conn) *Service {
 	return &Service{conn: conn}
 }
 
-// Speech is a POST /v1/tts body. VoiceID and Language come from the caller, not a built-in catalog.
+// Speech is a POST /v1/tts body. Language is required; "auto" detects it.
 type Speech struct {
-	Text     string `json:"text"`
-	VoiceID  string `json:"voice_id,omitempty"`
-	Language string `json:"language,omitempty"`
+	Text              string            `json:"text"`
+	Language          string            `json:"language"`
+	VoiceID           string            `json:"voice_id,omitempty"`
+	Format            *Format           `json:"output_format,omitempty"`
+	Speed             float64           `json:"speed,omitempty"`
+	TextNormalization bool              `json:"text_normalization,omitempty"`
+	Replace           map[string]string `json:"replace,omitempty"`
 }
 
-// Speak returns the audio bytes from POST /v1/tts.
-func (s *Service) Speak(ctx context.Context, req Speech) ([]byte, error) {
-	return s.conn.RESTClient().Do(ctx, http.MethodPost, "/v1/tts", req)
+// Format is the audio codec. The server default is MP3 at 24 kHz and 128 kbps.
+type Format struct {
+	Codec      string `json:"codec"`
+	SampleRate int    `json:"sample_rate,omitempty"`
+	BitRate    int    `json:"bit_rate,omitempty"`
 }
 
-// CustomVoices returns GET /v1/custom-voices. limit 0 uses the server default.
-func (s *Service) CustomVoices(ctx context.Context, limit int) (json.RawMessage, error) {
-	path := "/v1/custom-voices"
-	if limit > 0 {
-		path += "?limit=" + strconv.Itoa(limit)
+// Audio is synthesized speech and its media type, such as audio/mpeg.
+type Audio struct {
+	Data        []byte
+	ContentType string
+}
+
+// Speak synthesizes speech with POST /v1/tts.
+func (s *Service) Speak(ctx context.Context, req Speech) (*Audio, error) {
+	if req.Language == "" {
+		return nil, errors.New("xai: speech language is required; use \"auto\" to detect it")
 	}
-	raw, err := s.conn.RESTClient().Do(ctx, http.MethodGet, path, nil)
+	data, contentType, err := s.conn.RESTClient().DoBody(ctx, http.MethodPost, "/v1/tts", req)
 	if err != nil {
 		return nil, err
 	}
-	return json.RawMessage(raw), nil
+	return &Audio{Data: data, ContentType: contentType}, nil
+}
+
+// Voices returns GET /v1/tts/voices.
+func (s *Service) Voices(ctx context.Context) (json.RawMessage, error) {
+	return s.conn.RESTClient().Do(ctx, http.MethodGet, "/v1/tts/voices", nil)
+}
+
+// CustomVoices returns one page of GET /v1/custom-voices. Zero and empty values use server defaults.
+func (s *Service) CustomVoices(ctx context.Context, limit int, pageToken string) (json.RawMessage, error) {
+	q := url.Values{"pagination_token": {pageToken}}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	return s.conn.RESTClient().Do(ctx, http.MethodGet, rest.Query("/v1/custom-voices", q), nil)
 }
 
 // CustomVoice returns one custom voice.
 func (s *Service) CustomVoice(ctx context.Context, id string) (json.RawMessage, error) {
-	raw, err := s.conn.RESTClient().Do(ctx, http.MethodGet, "/v1/custom-voices/"+url.PathEscape(id), nil)
-	if err != nil {
-		return nil, err
-	}
-	return json.RawMessage(raw), nil
+	return s.conn.RESTClient().Do(ctx, http.MethodGet, rest.Path("/v1/custom-voices", id), nil)
 }
 
 // DeleteCustomVoice deletes a custom voice.
 func (s *Service) DeleteCustomVoice(ctx context.Context, id string) error {
-	_, err := s.conn.RESTClient().Do(ctx, http.MethodDelete, "/v1/custom-voices/"+url.PathEscape(id), nil)
+	_, err := s.conn.RESTClient().Do(ctx, http.MethodDelete, rest.Path("/v1/custom-voices", id), nil)
 	return err
 }
 
-// Voices returns GET /v1/tts/voices as JSON.
-func (s *Service) Voices(ctx context.Context) (json.RawMessage, error) {
-	raw, err := s.conn.RESTClient().Do(ctx, http.MethodGet, "/v1/tts/voices", nil)
-	if err != nil {
-		return nil, err
-	}
-	return json.RawMessage(raw), nil
+// Transcription is a POST /v1/stt request. Set Audio or URL.
+type Transcription struct {
+	Model    string
+	Audio    []byte
+	Filename string
+	URL      string
+	Language string
+	Format   bool // written-form numbers and units; needs Language
+	Diarize  bool
+	Keyterms []string
 }
 
 // Transcript is a POST /v1/stt result.
 type Transcript struct {
-	Text     string          `json:"text"`
-	Duration float64         `json:"duration"`
-	Words    json.RawMessage `json:"words"`
-	Raw      json.RawMessage `json:"-"`
+	Text     string  `json:"text"`
+	Language string  `json:"language"`
+	Duration float64 `json:"duration"`
+	Words    []Word  `json:"words"`
 }
 
-// Transcribe sends one audio file to POST /v1/stt.
-// Model is required by the caller. Format, language, and keyterms are optional.
-func (s *Service) Transcribe(ctx context.Context, model, filename string, audio []byte, language string, format bool, keyterms []string) (*Transcript, error) {
+// Word is one timed word. Speaker is set only when diarization is on.
+type Word struct {
+	Text       string  `json:"text"`
+	Start      float64 `json:"start"`
+	End        float64 `json:"end"`
+	Confidence float64 `json:"confidence"`
+	Speaker    *int    `json:"speaker"`
+}
+
+// Transcribe turns audio into text with POST /v1/stt.
+func (s *Service) Transcribe(ctx context.Context, req Transcription) (*Transcript, error) {
+	if (len(req.Audio) == 0) == (req.URL == "") {
+		return nil, errors.New("xai: set exactly one of Audio or URL")
+	}
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	fields := [][2]string{{"model", model}}
-	if language != "" {
-		fields = append(fields, [2]string{"language", language})
+	fields := url.Values{"model": {req.Model}, "url": {req.URL}, "language": {req.Language}, "keyterm": req.Keyterms}
+	if req.Format {
+		fields.Set("format", "true")
 	}
-	if format {
-		fields = append(fields, [2]string{"format", "true"})
+	if req.Diarize {
+		fields.Set("diarize", "true")
 	}
-	for _, term := range keyterms {
-		fields = append(fields, [2]string{"keyterm", term})
-	}
-	for _, field := range fields {
-		if err := w.WriteField(field[0], field[1]); err != nil {
-			return nil, err
+	for key, values := range fields {
+		for _, v := range values {
+			if v == "" {
+				continue
+			}
+			if err := w.WriteField(key, v); err != nil {
+				return nil, err
+			}
 		}
 	}
-	part, err := w.CreateFormFile("file", filename)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := part.Write(audio); err != nil {
-		return nil, err
+	if len(req.Audio) > 0 { // the file must be the last field
+		name := req.Filename
+		if name == "" {
+			name = "audio"
+		}
+		part, err := w.CreateFormFile("file", name)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := part.Write(req.Audio); err != nil {
+			return nil, err
+		}
 	}
 	if err := w.Close(); err != nil {
 		return nil, err
 	}
-	raw, err := s.postForm(ctx, "/v1/stt", w.FormDataContentType(), &buf)
+	raw, _, err := s.conn.RESTClient().Read(ctx, http.MethodPost, "/v1/stt", &rest.Body{Reader: &buf, ContentType: w.FormDataContentType()})
 	if err != nil {
 		return nil, err
 	}
 	var out Transcript
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, err
-	}
-	out.Raw = json.RawMessage(raw)
-	return &out, nil
+	return &out, json.Unmarshal(raw, &out)
 }
 
-// ClientSecret asks POST /v1/realtime/client_secrets for a short-lived token.
-// seconds is expires_after.seconds. The docs do not accept a session field.
-func (s *Service) ClientSecret(ctx context.Context, seconds int) (json.RawMessage, error) {
+// Secret is a short-lived token a browser or phone can use for the realtime socket.
+type Secret struct {
+	Value     string `json:"value"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+// ClientSecret mints a token with POST /v1/realtime/client_secrets.
+func (s *Service) ClientSecret(ctx context.Context, seconds int) (*Secret, error) {
 	body := map[string]any{"expires_after": map[string]int{"seconds": seconds}}
-	raw, err := s.conn.RESTClient().Do(ctx, http.MethodPost, "/v1/realtime/client_secrets", body)
-	if err != nil {
-		return nil, err
-	}
-	return json.RawMessage(raw), nil
+	var out Secret
+	return &out, s.conn.RESTClient().Call(ctx, http.MethodPost, "/v1/realtime/client_secrets", body, &out)
 }
 
-// Dial opens wss://…/v1/realtime. model is the query value the caller chooses.
+// Dial opens the speech-to-speech socket at /v1/realtime.
 func (s *Service) Dial(ctx context.Context, model string) (*Socket, error) {
-	u := rest.WebSocketBase(s.conn.RESTBase) + "/v1/realtime?model=" + url.QueryEscape(model)
-	ws, err := wsx.Dial(ctx, u, s.conn.APIKey, s.conn.UserAgent)
+	return s.dial(ctx, "/v1/realtime", url.Values{"model": {model}})
+}
+
+// DialTTS opens the streaming text-to-speech socket. Query keys follow the docs:
+// language, voice, codec, sample_rate, bit_rate.
+func (s *Service) DialTTS(ctx context.Context, query url.Values) (*Socket, error) {
+	return s.dial(ctx, "/v1/tts", query)
+}
+
+// DialSTT opens the streaming speech-to-text socket. Query keys follow the docs:
+// model, language, encoding, sample_rate, interim_results.
+func (s *Service) DialSTT(ctx context.Context, query url.Values) (*Socket, error) {
+	return s.dial(ctx, "/v1/stt", query)
+}
+
+func (s *Service) dial(ctx context.Context, path string, query url.Values) (*Socket, error) {
+	ws, err := s.conn.DialWS(ctx, rest.Query(path, query))
 	if err != nil {
 		return nil, err
 	}
-	return &Socket{conn: ws}, nil
-}
-
-// DialTTS opens the text-to-speech WebSocket. language, voice, and codec are query values.
-func (s *Service) DialTTS(ctx context.Context, language, voice, codec string) (*Socket, error) {
-	q := url.Values{}
-	if language != "" {
-		q.Set("language", language)
-	}
-	if voice != "" {
-		q.Set("voice", voice)
-	}
-	if codec != "" {
-		q.Set("codec", codec)
-	}
-	u := rest.WebSocketBase(s.conn.RESTBase) + "/v1/tts"
-	if encoded := q.Encode(); encoded != "" {
-		u += "?" + encoded
-	}
-	ws, err := wsx.Dial(ctx, u, s.conn.APIKey, s.conn.UserAgent)
-	if err != nil {
-		return nil, err
-	}
-	return &Socket{conn: ws}, nil
-}
-
-// STTQuery is the query string for the speech-to-text WebSocket.
-type STTQuery struct {
-	Model          string
-	Language       string
-	Encoding       string
-	SampleRate     int
-	InterimResults bool
-}
-
-// DialSTT opens the speech-to-text WebSocket.
-func (s *Service) DialSTT(ctx context.Context, q STTQuery) (*Socket, error) {
-	v := url.Values{}
-	if q.Model != "" {
-		v.Set("model", q.Model)
-	}
-	if q.Language != "" {
-		v.Set("language", q.Language)
-	}
-	if q.Encoding != "" {
-		v.Set("encoding", q.Encoding)
-	}
-	if q.SampleRate > 0 {
-		v.Set("sample_rate", strconv.Itoa(q.SampleRate))
-	}
-	if q.InterimResults {
-		v.Set("interim_results", "true")
-	}
-	u := rest.WebSocketBase(s.conn.RESTBase) + "/v1/stt"
-	if encoded := v.Encode(); encoded != "" {
-		u += "?" + encoded
-	}
-	ws, err := wsx.Dial(ctx, u, s.conn.APIKey, s.conn.UserAgent)
-	if err != nil {
-		return nil, err
-	}
-	return &Socket{conn: ws}, nil
+	return &Socket{Conn: ws}, nil
 }
 
 // Socket is one voice WebSocket. Send and Recv pass JSON events through.
 type Socket struct {
-	conn *wsx.Conn
+	*wsx.Conn
 }
-
-// Send writes one JSON event.
-func (s *Socket) Send(ctx context.Context, event any) error { return s.conn.Send(ctx, event) }
-
-// Recv reads the next server event.
-func (s *Socket) Recv(ctx context.Context) (json.RawMessage, error) { return s.conn.Recv(ctx) }
-
-// Close closes the socket.
-func (s *Socket) Close() error { return s.conn.Close() }
 
 // Update sends a session.update event. session is the session object from the docs.
 func (s *Socket) Update(ctx context.Context, session any) error {
 	return s.Send(ctx, map[string]any{"type": "session.update", "session": session})
-}
-
-func (s *Service) postForm(ctx context.Context, path, contentType string, body io.Reader) ([]byte, error) {
-	ctx, cancel := s.conn.Context(ctx)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.conn.RESTBase+path, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+s.conn.APIKey)
-	req.Header.Set("Content-Type", contentType)
-	if s.conn.UserAgent != "" {
-		req.Header.Set("User-Agent", s.conn.UserAgent)
-	}
-	client := s.conn.RESTClient().HTTP
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &rest.Error{Method: http.MethodPost, Path: path, Status: resp.StatusCode, Body: string(raw)}
-	}
-	return raw, nil
 }

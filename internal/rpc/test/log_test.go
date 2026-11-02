@@ -3,11 +3,12 @@ package rpc_test
 import (
 	"bytes"
 	"context"
-	"github.com/ifitsmanu/xai-sdk-go/internal/rpc"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ifitsmanu/xai-sdk-go/internal/rpc"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

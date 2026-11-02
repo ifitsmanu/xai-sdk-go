@@ -32,6 +32,22 @@ type options struct {
 	logBodies     bool
 	managementKey string
 	clientCert    *tls.Certificate
+	maxMessage    int
+	attempts      int
+}
+
+// WithMaxMessageSize bounds one gRPC message, REST response body, or WebSocket
+// message. The default is 64 MiB. Larger responses fail instead of being cut short.
+func WithMaxMessageSize(bytes int) Option {
+	return func(o *options) { o.maxMessage = bytes }
+}
+
+// WithAttempts sets the total tries for idempotent calls: gRPC reads that fail
+// with UNAVAILABLE, and REST GET or DELETE that fail with a network error, 429,
+// or 5xx. Calls that create or spend are never retried. The default is 5; 1 turns
+// retries off. gRPC caps attempts at 5.
+func WithAttempts(n int) Option {
+	return func(o *options) { o.attempts = n }
 }
 
 // WithAPIKey sets the bearer token. The default is the XAI_API_KEY environment variable.

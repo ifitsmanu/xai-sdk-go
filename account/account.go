@@ -3,6 +3,7 @@ package account
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/ifitsmanu/xai-sdk-go/internal/rpc"
@@ -25,6 +26,8 @@ type Me struct {
 	ZDRStatus   string `json:"zdr_status"`
 	TeamBlocked bool   `json:"team_blocked"`
 	APIKey      *Key   `json:"api_key"`
+	// OAuth is set when the caller used an OAuth token instead of an API key.
+	OAuth json.RawMessage `json:"oauth,omitempty"`
 }
 
 // Key is the redacted key that made the call. The secret is not returned.

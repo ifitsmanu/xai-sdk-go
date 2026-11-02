@@ -4,7 +4,7 @@ BUF_VERSION ?= 1.61.0
 BIN := bin
 BUF := $(BIN)/buf
 
-.PHONY: help fmt lint test check ui chat agent generate bench
+.PHONY: help fmt lint test cover live vuln check ui chat agent generate bench
 
 help: ## Show commands
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  make %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -17,13 +17,23 @@ lint: ## Check gofmt and run golangci-lint
 	golangci-lint run ./...
 	cd tui && golangci-lint run ./...
 
-test: ## Run tests
-	go test ./...
-	cd tui && go test ./...
+test: ## Run tests with the race detector
+	go test -race ./...
+	cd tui && go test -race ./...
 
-check: ## Lint and test. Run this before a push
+cover: ## Coverage of the SDK packages. Tests live in test/ folders, so -coverpkg is required
+	go test -coverpkg=./... -coverprofile=cover.out ./... >/dev/null && go tool cover -func=cover.out | tail -1
+
+live: ## Call the real API with XAI_API_KEY. Costs a few cents
+	go test -tags live -count=1 -v ./test/live/
+
+vuln: ## Check dependencies and the toolchain for known vulnerabilities
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+check: ## Lint, test, and vulnerability check. Run this before a push
 	$(MAKE) lint
 	$(MAKE) test
+	$(MAKE) vuln
 
 ui: ## Open the terminal chat
 	cd tui && go run ./cmd/xai

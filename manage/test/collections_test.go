@@ -2,10 +2,11 @@ package manage_test
 
 import (
 	"context"
-	"github.com/ifitsmanu/xai-sdk-go/manage"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/ifitsmanu/xai-sdk-go/manage"
 )
 
 func TestCreateUsesManagementKey(t *testing.T) {

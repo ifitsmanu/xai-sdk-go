@@ -2,14 +2,17 @@
 package rpc
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/ifitsmanu/xai-sdk-go/internal/rest"
+	"github.com/ifitsmanu/xai-sdk-go/internal/wsx"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -21,11 +24,14 @@ const (
 	DefaultHost = "api.x.ai:443"
 	// DefaultTimeout is applied when a call context has no deadline.
 	DefaultTimeout = 27 * time.Minute
-	maxMessageSize = 20 << 20
+	// DefaultMaxMessageSize bounds one gRPC message, REST body, or WebSocket message.
+	DefaultMaxMessageSize = rest.DefaultMaxBody
+	// DefaultAttempts is how many times an idempotent call is tried. gRPC caps this at 5.
+	DefaultAttempts = 5
 )
 
 // Reads retry UNAVAILABLE. Calls that start work or spend quota do not.
-const serviceConfig = `{
+const serviceConfigTemplate = `{
   "methodConfig": [
     {
       "name": [
@@ -52,7 +58,7 @@ const serviceConfig = `{
     {
       "name": [{}],
       "retryPolicy": {
-        "maxAttempts": 5,
+        "maxAttempts": %d,
         "initialBackoff": "0.1s",
         "maxBackoff": "1s",
         "backoffMultiplier": 2,
@@ -76,6 +82,10 @@ type Config struct {
 	DialOpts  []grpc.DialOption
 	// TLS is the client TLS config. Set Certificates for mTLS.
 	TLS *tls.Config
+	// MaxMessageSize bounds gRPC messages, REST bodies, and WebSocket messages.
+	MaxMessageSize int
+	// Attempts is the total tries for idempotent calls. 1 turns retries off.
+	Attempts int
 }
 
 // Conn is a logged, authenticated gRPC connection.
@@ -89,6 +99,8 @@ type Conn struct {
 	RESTBase  string
 	UserAgent string
 	REST      *rest.Client
+	// MaxMessageSize bounds WebSocket messages. Zero uses DefaultMaxMessageSize.
+	MaxMessageSize int
 }
 
 // Dial opens a connection. Logger must be non-nil.
@@ -99,6 +111,12 @@ func Dial(cfg Config) (*Conn, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = NopLogger()
 	}
+	if cfg.MaxMessageSize <= 0 {
+		cfg.MaxMessageSize = DefaultMaxMessageSize
+	}
+	if cfg.Attempts <= 0 {
+		cfg.Attempts = DefaultAttempts
+	}
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(transportCreds(cfg.Insecure, cfg.TLS)),
 		grpc.WithPerRPCCredentials(apiKeyCredentials{
@@ -107,10 +125,10 @@ func Dial(cfg Config) (*Conn, error) {
 			insecure: cfg.Insecure,
 		}),
 		grpc.WithUserAgent(cfg.UserAgent),
-		grpc.WithDefaultServiceConfig(serviceConfig),
+		grpc.WithDefaultServiceConfig(serviceConfig(cfg.Attempts)),
 		grpc.WithDefaultCallOptions(
-			grpc.MaxCallRecvMsgSize(maxMessageSize),
-			grpc.MaxCallSendMsgSize(maxMessageSize),
+			grpc.MaxCallRecvMsgSize(cfg.MaxMessageSize),
+			grpc.MaxCallSendMsgSize(cfg.MaxMessageSize),
 		),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
@@ -130,12 +148,13 @@ func Dial(cfg Config) (*Conn, error) {
 	base := restBase(cfg.Host, cfg.Insecure)
 	httpClient := &http.Client{Transport: httpTransport(cfg.TLS)}
 	return &Conn{
-		GRPC:      cc,
-		Timeout:   cfg.Timeout,
-		Logger:    cfg.Logger,
-		APIKey:    cfg.APIKey,
-		RESTBase:  base,
-		UserAgent: cfg.UserAgent,
+		GRPC:           cc,
+		Timeout:        cfg.Timeout,
+		Logger:         cfg.Logger,
+		APIKey:         cfg.APIKey,
+		RESTBase:       base,
+		UserAgent:      cfg.UserAgent,
+		MaxMessageSize: cfg.MaxMessageSize,
 		REST: &rest.Client{
 			Base:      base,
 			Key:       cfg.APIKey,
@@ -143,6 +162,8 @@ func Dial(cfg Config) (*Conn, error) {
 			HTTP:      httpClient,
 			Logger:    cfg.Logger,
 			Timeout:   cfg.Timeout,
+			MaxBody:   int64(cfg.MaxMessageSize),
+			Attempts:  cfg.Attempts,
 		},
 	}, nil
 }
@@ -221,4 +242,17 @@ func httpTransport(cfg *tls.Config) *http.Transport {
 		transport.TLSClientConfig = cfg
 	}
 	return transport
+}
+
+// serviceConfig retries UNAVAILABLE on reads. One attempt means no retry policy.
+func serviceConfig(attempts int) string {
+	if attempts < 2 {
+		return "{}"
+	}
+	return fmt.Sprintf(serviceConfigTemplate, min(attempts, 5))
+}
+
+// DialWS opens a WebSocket on this connection's REST origin with its key and size limit.
+func (c *Conn) DialWS(ctx context.Context, pathAndQuery string) (*wsx.Conn, error) {
+	return wsx.Dial(ctx, rest.WebSocketBase(c.RESTBase)+pathAndQuery, c.APIKey, c.UserAgent, int64(cmp.Or(c.MaxMessageSize, DefaultMaxMessageSize)))
 }

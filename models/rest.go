@@ -16,19 +16,43 @@ type VideoModel struct {
 	Aliases          []string `json:"aliases"`
 	InputModalities  []string `json:"input_modalities"`
 	OutputModalities []string `json:"output_modalities"`
+	OwnedBy          string   `json:"owned_by"`
 }
 
 // ListedModel is one row from GET /v1/models.
 // That list includes language, image, video, and embedding models, plus prices.
+// Token prices are USD cents per 100M tokens; 12500 is $1.25 per 1M tokens.
+// Above LongContextThreshold prompt tokens the *LongContext prices apply.
 type ListedModel struct {
-	ID                       string   `json:"id"`
-	Aliases                  []string `json:"aliases"`
-	Created                  int64    `json:"created"`
-	OwnedBy                  string   `json:"owned_by"`
-	ContextLength            int64    `json:"context_length"`
-	PromptTextTokenPrice     int64    `json:"prompt_text_token_price"`
-	CompletionTextTokenPrice int64    `json:"completion_text_token_price"`
-	ImagePrice               int64    `json:"image_price"`
+	ID                                    string        `json:"id"`
+	Aliases                               []string      `json:"aliases"`
+	Created                               int64         `json:"created"`
+	OwnedBy                               string        `json:"owned_by"`
+	ContextLength                         int64         `json:"context_length"`
+	Capabilities                          *Capabilities `json:"capabilities"`
+	PromptTextTokenPrice                  int64         `json:"prompt_text_token_price"`
+	CachedPromptTextTokenPrice            int64         `json:"cached_prompt_text_token_price"`
+	PromptImageTokenPrice                 int64         `json:"prompt_image_token_price"`
+	CompletionTextTokenPrice              int64         `json:"completion_text_token_price"`
+	PromptTextTokenPriceLongContext       int64         `json:"prompt_text_token_price_long_context"`
+	CachedPromptTextTokenPriceLongContext int64         `json:"cached_prompt_text_token_price_long_context"`
+	CompletionTextTokenPriceLongContext   int64         `json:"completion_text_token_price_long_context"`
+	LongContextThreshold                  int64         `json:"long_context_threshold"`
+	ImagePrice                            int64         `json:"image_price"`
+	Pricing                               []ImagePrice  `json:"pricing"`
+}
+
+// Capabilities lists the request settings a model accepts.
+type Capabilities struct {
+	ReasoningEffort        []string `json:"reasoning_effort"`
+	DefaultReasoningEffort string   `json:"default_reasoning_effort"`
+}
+
+// ImagePrice is one image tier. Prices use the same units as ImagePrice on the model.
+type ImagePrice struct {
+	Quality       string `json:"quality"`
+	Resolution    string `json:"resolution"`
+	PricePerImage int64  `json:"price_per_image"`
 }
 
 // All lists every model this key can call, from the REST models API.

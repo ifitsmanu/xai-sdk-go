@@ -2,9 +2,9 @@ package voice_test
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -12,61 +12,58 @@ import (
 	"github.com/ifitsmanu/xai-sdk-go/voice"
 )
 
-func TestSpeak(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/tts" {
-			t.Errorf("path = %s", r.URL.Path)
-		}
-		_, _ = io.Copy(io.Discard, r.Body)
-		_, _ = w.Write([]byte("audio"))
-	}))
-	defer srv.Close()
+func service(url string) *voice.Service {
+	return voice.NewService(&rpc.Conn{RESTBase: url, APIKey: "test-key", Logger: rpc.NopLogger()})
+}
 
-	svc := voice.NewService(&rpc.Conn{RESTBase: srv.URL, APIKey: "test-key", Logger: rpc.NopLogger()})
-	got, err := svc.Speak(context.Background(), voice.Speech{Text: "hi", VoiceID: "eve", Language: "en"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "audio" {
-		t.Fatalf("audio = %q", got)
+// The live API returns 422 when language is missing, so Speak rejects it before sending.
+func TestSpeakRequiresLanguage(t *testing.T) {
+	if _, err := service("http://unused").Speak(context.Background(), voice.Speech{Text: "hi"}); err == nil {
+		t.Fatal("expected an error for a missing language")
 	}
 }
 
-func TestDialRealtime(t *testing.T) {
+func TestSpeakReturnsAudioWithType(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("model") != "voice-model" {
-			t.Errorf("model = %q", r.URL.Query().Get("model"))
-		}
-		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
-		if err != nil {
-			return
-		}
-		defer c.Close(websocket.StatusNormalClosure, "")
-		ctx := r.Context()
-		_, msg, err := c.Read(ctx)
-		if err != nil {
-			return
-		}
-		if err := c.Write(ctx, websocket.MessageText, msg); err != nil {
-			return
-		}
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write([]byte("mp3"))
 	}))
 	defer srv.Close()
 
-	svc := voice.NewService(&rpc.Conn{RESTBase: srv.URL, APIKey: "test-key", Logger: rpc.NopLogger()})
-	sock, err := svc.Dial(context.Background(), "voice-model")
+	got, err := service(srv.URL).Speak(context.Background(), voice.Speech{Text: "hi", Language: "en"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sock.Close()
-	if err := sock.Update(context.Background(), map[string]any{"voice": "eve"}); err != nil {
+	if string(got.Data) != "mp3" || got.ContentType != "audio/mpeg" {
+		t.Fatalf("audio = %q %q", got.Data, got.ContentType)
+	}
+}
+
+// Realtime audio deltas reach about 108 KB live. The socket must read messages
+// far above the WebSocket library's 32 KiB default.
+func TestRealtimeReadsLargeAudioDelta(t *testing.T) {
+	delta := `{"type":"response.output_audio.delta","delta":"` + strings.Repeat("A", 200<<10) + `"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.CloseNow() }()
+		_ = c.Write(r.Context(), websocket.MessageText, []byte(delta))
+		_, _, _ = c.Read(r.Context()) // hold the socket open until the client closes
+	}))
+	defer srv.Close()
+
+	sock, err := service(srv.URL).Dial(context.Background(), "voice-model")
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = sock.Close() }()
 	got, err := sock.Recv(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) == 0 {
-		t.Fatal("empty event")
+	if len(got) != len(delta) {
+		t.Fatalf("read %d bytes, want %d", len(got), len(delta))
 	}
 }
