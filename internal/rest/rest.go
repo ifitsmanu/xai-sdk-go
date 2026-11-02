@@ -3,6 +3,7 @@ package rest
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,7 +34,14 @@ type Client struct {
 	// Attempts is the total tries for a bodiless GET or DELETE that fails with
 	// a network error, 429, or 5xx. Requests with a body are never retried.
 	Attempts int
+	// MaxWait caps how long one retry waits for a rate limit to reset. A longer
+	// wait returns the error instead; its RetryAfter says when to try again.
+	// Zero is DefaultMaxWait.
+	MaxWait time.Duration
 }
+
+// DefaultMaxWait is the longest a retry waits for a rate limit by default.
+const DefaultMaxWait = time.Minute
 
 // Error is a non-2xx HTTP response. The body is truncated and the key is not included.
 type Error struct {
@@ -77,9 +85,6 @@ func (c *Client) Send(ctx context.Context, method, path string, body *Body, acce
 	if c == nil || c.Base == "" {
 		return nil, errors.New("xai: REST base URL is empty")
 	}
-	if c.Key == "" {
-		return nil, errors.New("xai: API key is empty")
-	}
 	ctx, cancel := c.context(ctx)
 	attempts := 1
 	if body == nil && (method == http.MethodGet || method == http.MethodDelete) {
@@ -94,7 +99,8 @@ func (c *Client) Send(ctx context.Context, method, path string, body *Body, acce
 		if err == nil {
 			err = responseError(method, path, resp)
 		}
-		if try >= attempts || !retryable(err) || !sleep(ctx, backoff(try, err)) {
+		wait := backoff(try, err)
+		if try >= attempts || !retryable(err) || wait > cmp.Or(c.MaxWait, DefaultMaxWait) || !sleep(ctx, wait) {
 			cancel()
 			return nil, err
 		}
@@ -110,7 +116,9 @@ func (c *Client) once(ctx context.Context, method, path string, body *Body, acce
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Key)
+	if c.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Key)
+	}
 	if body != nil && body.ContentType != "" {
 		req.Header.Set("Content-Type", body.ContentType)
 	}
@@ -146,6 +154,8 @@ func responseError(method, path string, resp *http.Response) *Error {
 	e := &Error{Method: method, Path: path, Status: resp.StatusCode, Body: msg, RequestID: resp.Header.Get("x-request-id")}
 	if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs > 0 {
 		e.RetryAfter = time.Duration(secs) * time.Second
+	} else if reset, err := strconv.ParseInt(resp.Header.Get("x-rate-limit-reset"), 10, 64); err == nil && resp.StatusCode == http.StatusTooManyRequests {
+		e.RetryAfter = max(time.Until(time.Unix(reset, 0)), time.Second)
 	}
 	return e
 }
