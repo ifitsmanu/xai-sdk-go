@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ifitsmanu/xai-sdk-go"
+	"github.com/ifitsmanu/xai-sdk-go/models"
 	"github.com/ifitsmanu/xai-sdk-go/tui"
 )
 
@@ -26,12 +27,12 @@ func main() {
 			}
 		}()
 	}
-	names := languageModels(client)
+	names, best := languageModels(client)
 	model := tui.New(tui.Config{
 		Sender:    sender,
 		HasKey:    hasKey,
 		Models:    names,
-		ModelName: firstName(names),
+		ModelName: best,
 	})
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := program.Run(); err != nil {
@@ -66,22 +67,16 @@ func openClient() (*xai.Client, tui.Sender, bool, error) {
 	return client, tui.ClientSender{Client: client}, true, nil
 }
 
-func languageModels(client *xai.Client) []string {
+func languageModels(client *xai.Client) ([]string, string) {
 	if client == nil {
-		return nil
+		return nil, ""
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	names, err := client.Models.LanguageNames(ctx)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
-	return names
-}
-
-func firstName(names []string) string {
-	if len(names) == 0 {
-		return ""
-	}
-	return names[0]
+	best, _ := client.Models.Select(ctx, models.Need{})
+	return names, best
 }

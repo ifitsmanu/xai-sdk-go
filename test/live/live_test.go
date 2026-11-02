@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ifitsmanu/xai-sdk-go"
+	"github.com/ifitsmanu/xai-sdk-go/models"
 	"github.com/ifitsmanu/xai-sdk-go/responses"
 	"github.com/ifitsmanu/xai-sdk-go/voice"
 )
@@ -40,11 +41,11 @@ func client(t *testing.T) (*xai.Client, context.Context) {
 
 func languageModel(t *testing.T, c *xai.Client, ctx context.Context) string {
 	t.Helper()
-	names, err := c.Models.LanguageNames(ctx)
-	if err != nil || len(names) == 0 {
-		t.Fatalf("language models: %v %v", names, err)
+	id, err := c.Models.Select(ctx, models.Need{Rank: models.Cheapest})
+	if err != nil {
+		t.Fatal(err)
 	}
-	return names[0]
+	return id
 }
 
 func TestAccountAndModels(t *testing.T) {
@@ -64,6 +65,11 @@ func TestAccountAndModels(t *testing.T) {
 	}
 	if _, err := c.Models.VideoNames(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if id, err := c.Models.Select(ctx, models.Need{}); err != nil || id == "" {
+		t.Fatalf("select = %q, %v", id, err)
+	} else {
+		t.Logf("newest language model: %s", id)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 
 	"github.com/ifitsmanu/xai-sdk-go"
 	"github.com/ifitsmanu/xai-sdk-go/chat"
+	"github.com/ifitsmanu/xai-sdk-go/models"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
 
@@ -31,16 +32,15 @@ func main() {
 	}
 	defer client.Close()
 
-	names, err := client.Models.LanguageNames(context.Background())
+	// The newest language model this key can call. models.Need also filters
+	// by context size, price, reasoning effort, and image input.
+	model, err := client.Models.Select(context.Background(), models.Need{})
 	if err != nil {
 		panic(err)
 	}
-	if len(names) == 0 {
-		panic("no language models")
-	}
 
 	conversation := client.Chat.Create(chat.Config{
-		Model: names[0],
+		Model: model,
 		Messages: []*xaiapi.Message{
 			chat.SystemText("You are concise."),
 		},
@@ -90,7 +90,7 @@ An agent is an instruction, a model, and tools. `client.Runner()` calls the mode
 ```go
 assistant := &agent.Agent{
 	Name:        "assistant",
-	Model:       names[0],
+	Model:       model,
 	Instruction: "You are concise. Use tools when they help.",
 	ServerTools: []*xaiapi.Tool{chat.WebSearch(nil)},
 }

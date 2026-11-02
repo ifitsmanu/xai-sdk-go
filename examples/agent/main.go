@@ -9,6 +9,7 @@ import (
 
 	"github.com/ifitsmanu/xai-sdk-go"
 	"github.com/ifitsmanu/xai-sdk-go/agent"
+	"github.com/ifitsmanu/xai-sdk-go/models"
 )
 
 func main() {
@@ -23,18 +24,14 @@ func main() {
 		}
 	}()
 
-	names, err := client.Models.LanguageNames(context.Background())
+	model, err := client.Models.Select(context.Background(), models.Need{})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if len(names) == 0 {
-		fmt.Fprintln(os.Stderr, "no language models")
-		os.Exit(1)
-	}
 	assistant := &agent.Agent{
 		Name:        "assistant",
-		Model:       names[0],
+		Model:       model,
 		Instruction: "You are a concise assistant. Use tools when they help.",
 		Tools: []agent.Tool{
 			agent.Func("current_time", "Current UTC time.", map[string]any{

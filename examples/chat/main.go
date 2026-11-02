@@ -7,6 +7,7 @@ import (
 
 	"github.com/ifitsmanu/xai-sdk-go"
 	"github.com/ifitsmanu/xai-sdk-go/chat"
+	"github.com/ifitsmanu/xai-sdk-go/models"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
 
@@ -22,17 +23,13 @@ func main() {
 		}
 	}()
 
-	names, err := client.Models.LanguageNames(context.Background())
+	model, err := client.Models.Select(context.Background(), models.Need{})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if len(names) == 0 {
-		fmt.Fprintln(os.Stderr, "no language models")
-		os.Exit(1)
-	}
 	conversation := client.Chat.Create(chat.Config{
-		Model: names[0],
+		Model: model,
 		Messages: []*xaiapi.Message{
 			chat.SystemText("You are a concise assistant."),
 		},
