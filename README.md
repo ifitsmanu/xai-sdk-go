@@ -61,16 +61,23 @@ func main() {
 
 These are not gRPC methods, so this client calls them over HTTP or a WebSocket. `client.Responses` is the Responses API, including `Dial` for the `/v1/responses` socket. `client.Skills` and `client.Account` are the other inference REST calls. `client.Voice` is speech, transcription, and `wss://…/v1/realtime`. `WithHost(xai.HostUS)` and `WithHost(xai.HostMTLS)` plus `WithClientCertificate` select the documented hosts. `client.Management` is set from `XAI_MANAGEMENT_API_KEY` and covers collections, billing, audit, and team API keys. Search in a collection stays on `client.Documents`.
 
-Server tools go on the same chat. Your functions run locally. Web search, X search, code execution, image generation, and MCP run at xAI.
+Declare tools once with package `tool`. Functions run in your process; web search, X search, code execution, collections, image generation, and remote MCP run at xAI. `tool.Func` builds the argument schema from a Go struct and validates calls against it. The same list converts to each API, whose wire shapes differ:
 
 ```go
-Tools: []*xaiapi.Tool{
-    chat.WebSearch(nil),
-    chat.CodeExecution(),
-    chat.ImageGeneration(nil),
-    chat.MCP(&xaiapi.MCP{ServerUrl: serverURL}),
-},
+weather, err := tool.Func("weather", "Weather for a city.",
+	func(ctx context.Context, in struct {
+		City string `json:"city" jsonschema:"city name"`
+	}) (string, error) {
+		return lookup(ctx, in.City)
+	})
+
+tools := []tool.Tool{weather, tool.WebSearch{}, tool.CodeExecution{}, tool.MCP{Label: "docs", URL: serverURL}}
+chatTools, err := tool.ForChat(tools)           // chat.Config.Tools
+respTools, err := tool.ForResponses(tools)      // responses.Request.Tools
+voiceTools, err := tool.ForVoice(tools)         // voice.Session.Tools
 ```
+
+An agent takes the list directly as `Agent.Tools`.
 
 Image models come from gRPC. Video models come from `GET /v1/video-generation-models`, because that list is not a gRPC method. `client.Models.All` is `GET /v1/models`.
 
@@ -92,7 +99,7 @@ assistant := &agent.Agent{
 	Name:        "assistant",
 	Model:       model,
 	Instruction: "You are concise. Use tools when they help.",
-	ServerTools: []*xaiapi.Tool{chat.WebSearch(nil)},
+	Tools:       []tool.Tool{tool.WebSearch{}},
 }
 
 session := agent.NewSession()

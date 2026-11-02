@@ -76,22 +76,6 @@ func TestWaitDeferredRequiresID(t *testing.T) {
 	}
 }
 
-func TestFunctionSchema(t *testing.T) {
-	tool, err := chat.Function("get_weather", "Weather", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"city": map[string]any{"type": "string"},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fn := tool.GetFunction()
-	if fn.GetName() != "get_weather" || fn.GetParameters() == "" {
-		t.Fatalf("function = %+v", fn)
-	}
-}
-
 func TestClientFunctionIgnoresServerTools(t *testing.T) {
 	_, ok := chat.ClientFunction(&xaiapi.ToolCall{
 		Id:   "call_web",

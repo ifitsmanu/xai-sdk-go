@@ -9,6 +9,7 @@ import (
 
 	"github.com/ifitsmanu/xai-sdk-go/agent"
 	"github.com/ifitsmanu/xai-sdk-go/chat"
+	"github.com/ifitsmanu/xai-sdk-go/tool"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
 
@@ -60,8 +61,8 @@ func TestRunnerExecutesToolThenAnswers(t *testing.T) {
 		Name:        "weather",
 		Model:       "grok-test",
 		Instruction: "Use tools.",
-		Tools: []agent.Tool{
-			agent.Func("get_weather", "Get weather", map[string]any{"type": "object"}, func(_ context.Context, args json.RawMessage) (string, error) {
+		Tools: []tool.Tool{
+			fn("get_weather", "Get weather", map[string]any{"type": "object"}, func(_ context.Context, args json.RawMessage) (string, error) {
 				seenArgs = string(args)
 				return "sunny", nil
 			}),
@@ -115,12 +116,11 @@ func TestRunnerExecutesToolThenAnswers(t *testing.T) {
 }
 
 func TestServerToolsAreSent(t *testing.T) {
-	web := chat.WebSearch(&xaiapi.WebSearch{AllowedDomains: []string{"x.ai"}})
 	ag := &agent.Agent{
 		Name:        "search",
 		Model:       "grok-test",
 		Instruction: "Search when needed.",
-		ServerTools: []*xaiapi.Tool{web},
+		Tools:       []tool.Tool{tool.WebSearch{AllowedDomains: []string{"x.ai"}}},
 	}
 	comp := &scripted{fn: func(req *xaiapi.GetCompletionsRequest) (*xaiapi.GetChatCompletionResponse, error) {
 		if len(req.Tools) != 1 || req.Tools[0].GetWebSearch().GetAllowedDomains()[0] != "x.ai" {
@@ -224,7 +224,7 @@ func TestBeforeToolStopsRun(t *testing.T) {
 	ag := &agent.Agent{
 		Name:  "guarded",
 		Model: "grok-test",
-		Tools: []agent.Tool{agent.Func("danger", "nope", nil, func(context.Context, json.RawMessage) (string, error) {
+		Tools: []tool.Tool{fn("danger", "nope", nil, func(context.Context, json.RawMessage) (string, error) {
 			t.Fatal("tool ran")
 			return "", nil
 		})},

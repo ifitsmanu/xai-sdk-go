@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/ifitsmanu/xai-sdk-go"
 	"github.com/ifitsmanu/xai-sdk-go/agent"
 	"github.com/ifitsmanu/xai-sdk-go/models"
+	"github.com/ifitsmanu/xai-sdk-go/tool"
 )
 
 func main() {
@@ -29,22 +29,30 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	// The schema for the arguments comes from the struct.
+	clock, err := tool.Func("current_time", "Current time in a time zone.",
+		func(_ context.Context, in struct {
+			Zone string `json:"zone" jsonschema:"IANA time zone, such as America/Chicago"`
+		}) (string, error) {
+			loc, err := time.LoadLocation(in.Zone)
+			if err != nil {
+				return "", err
+			}
+			return time.Now().In(loc).Format(time.RFC1123), nil
+		})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	assistant := &agent.Agent{
 		Name:        "assistant",
 		Model:       model,
 		Instruction: "You are a concise assistant. Use tools when they help.",
-		Tools: []agent.Tool{
-			agent.Func("current_time", "Current UTC time.", map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			}, func(context.Context, json.RawMessage) (string, error) {
-				return time.Now().UTC().Format(time.RFC3339), nil
-			}),
-		},
+		Tools:       []tool.Tool{clock, tool.WebSearch{}},
 	}
 
 	session := agent.NewSession()
-	for ev, err := range client.Runner().Run(context.Background(), session, assistant, "What time is it?") {
+	for ev, err := range client.Runner().Run(context.Background(), session, assistant, "What time is it in Tokyo, and what is the top xAI news today?") {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

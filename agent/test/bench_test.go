@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ifitsmanu/xai-sdk-go/agent"
+	"github.com/ifitsmanu/xai-sdk-go/tool"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
 
@@ -25,8 +26,8 @@ func BenchmarkRun(b *testing.B) {
 		Name:        "bench",
 		Model:       "grok-test",
 		Instruction: "Be fast.",
-		Tools: []agent.Tool{
-			agent.Func("echo", "Echo", map[string]any{"type": "object"}, func(context.Context, json.RawMessage) (string, error) {
+		Tools: []tool.Tool{
+			fn("echo", "Echo", map[string]any{"type": "object"}, func(context.Context, json.RawMessage) (string, error) {
 				return "ok", nil
 			}),
 		},

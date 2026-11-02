@@ -10,9 +10,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ifitsmanu/xai-sdk-go/chat"
+	"github.com/ifitsmanu/xai-sdk-go/tool"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
 
@@ -24,17 +26,14 @@ const DefaultMaxTurns = 8
 
 // Agent is one model, one instruction, and the tools it may call.
 // Instruction and SubAgents are read on every model call.
-// A tool schema is encoded once, after the first successful Spec call.
 type Agent struct {
 	Name        string
 	Description string
 	Model       string
 	Instruction string
-	Tools       []Tool
-	// ServerTools run on the xAI side: web search, X search, code execution,
-	// image generation, collections search, and MCP. The runner does not call them.
-	ServerTools []*xaiapi.Tool
-	SubAgents   []*Agent
+	// Tools mixes functions this process runs with server tools xAI runs.
+	Tools     []tool.Tool
+	SubAgents []*Agent
 	// MaxTurns limits client-side model calls. Zero uses DefaultMaxTurns.
 	MaxTurns int
 	// ServerMaxTurns is sent as the API max_turns for server-side tools.
@@ -95,63 +94,33 @@ func (a *Agent) findSub(name string) *Agent {
 	return nil
 }
 
-func (a *Agent) toolSpecs() ([]*xaiapi.Tool, map[string]Tool, error) {
-	specs := make([]*xaiapi.Tool, 0, len(a.Tools)+len(a.ServerTools)+1)
-	for _, tool := range a.ServerTools {
-		if tool != nil {
-			specs = append(specs, tool)
-		}
-	}
-	byName := make(map[string]Tool, len(a.Tools)+1)
-	for _, tool := range a.Tools {
-		if tool == nil {
-			continue
-		}
-		spec, err := tool.Spec()
-		if err != nil {
-			return nil, nil, err
-		}
-		fn := spec.GetFunction()
-		if fn == nil || fn.Name == "" {
-			return nil, nil, fmt.Errorf("agent: tool spec is missing a function name")
-		}
-		specs = append(specs, spec)
-		byName[fn.Name] = tool
-	}
+func (a *Agent) toolSpecs() ([]*xaiapi.Tool, map[string]*tool.Function, error) {
+	tools := a.Tools
 	if len(a.SubAgents) > 0 {
-		spec, err := handoffSpec(a.SubAgents)
-		if err != nil {
-			return nil, nil, err
-		}
-		specs = append(specs, spec)
-		byName[HandoffTool] = handoffTool{parent: a}
+		tools = append(slices.Clip(tools), handoffTool(a.SubAgents))
 	}
-	return specs, byName, nil
+	specs, err := tool.ForChat(tools)
+	if err != nil {
+		return nil, nil, err
+	}
+	return specs, tool.Functions(tools), nil
 }
 
-func handoffSpec(subs []*Agent) (*xaiapi.Tool, error) {
+// handoffTool is declared to the model; the runner handles the call itself.
+func handoffTool(subs []*Agent) *tool.Function {
 	names := make([]string, 0, len(subs))
 	for _, sub := range subs {
 		if sub != nil && sub.Name != "" {
 			names = append(names, sub.Name)
 		}
 	}
-	return chat.Function(HandoffTool, "Hand the conversation to another agent.", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"agent": map[string]any{
-				"type": "string",
-				"enum": names,
-			},
+	return &tool.Function{
+		Name:        HandoffTool,
+		Description: "Hand the conversation to another agent.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"agent": map[string]any{"type": "string", "enum": names}},
+			"required":   []string{"agent"},
 		},
-		"required": []string{"agent"},
-	})
-}
-
-type handoffTool struct{ parent *Agent }
-
-func (h handoffTool) Spec() (*xaiapi.Tool, error) { return handoffSpec(h.parent.SubAgents) }
-
-func (h handoffTool) Run(context.Context, json.RawMessage) (string, error) {
-	return "", nil
+	}
 }

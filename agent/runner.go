@@ -14,6 +14,7 @@ import (
 	"log/slog"
 
 	"github.com/ifitsmanu/xai-sdk-go/chat"
+	"github.com/ifitsmanu/xai-sdk-go/tool"
 	"github.com/ifitsmanu/xai-sdk-go/xaiapi"
 )
 
@@ -238,10 +239,10 @@ func (r *Runner) run(ctx context.Context, session *Session, ag *Agent, input str
 				handedOff = true
 				continue
 			}
-			tool := byName[call.name]
+			fn := byName[call.name]
 			r.log(ctx, slog.LevelDebug, "agent tool arguments", "agent", active.Name, "tool", call.name, "args", truncate(call.args, 512))
 			started := time.Now()
-			result, stop, err := r.execTool(ctx, active, call, tool)
+			result, stop, err := r.execTool(ctx, active, call, fn)
 			elapsed := time.Since(started)
 			if stop {
 				msg := "agent: blocked"
@@ -288,21 +289,21 @@ type pendingCall struct {
 	args string
 }
 
-func (r *Runner) execTool(ctx context.Context, ag *Agent, call pendingCall, tool Tool) (string, bool, error) {
+func (r *Runner) execTool(ctx context.Context, ag *Agent, call pendingCall, fn *tool.Function) (string, bool, error) {
 	c := Call{ID: call.id, Name: call.name, Args: json.RawMessage(call.args)}
 	if ag.Hooks.BeforeTool != nil {
 		if err := ag.Hooks.BeforeTool(ctx, c); err != nil {
 			return "", true, err
 		}
 	}
-	if tool == nil {
+	if fn == nil || fn.Run == nil {
 		err := fmt.Errorf("agent: unknown tool %s", call.name)
 		if ag.Hooks.AfterTool != nil {
 			ag.Hooks.AfterTool(ctx, c, "", err)
 		}
 		return "", false, err
 	}
-	result, err := tool.Run(ctx, c.Args)
+	result, err := fn.Run(ctx, c.Args)
 	if ag.Hooks.AfterTool != nil {
 		ag.Hooks.AfterTool(ctx, c, result, err)
 	}
